@@ -12,6 +12,8 @@ library(clusterProfiler)
 library(org.Hs.eg.db)
 library(ggnewscale)
 library(cowplot)
+library(ggfortify)
+library(clusterProfiler)
 
 ########################################################################################
 # set prroject  parameters
@@ -26,7 +28,7 @@ dir.create(paste0("figures/"), recursive = TRUE, showWarnings = TRUE)
 dir.create(paste0("data/"), recursive = TRUE, showWarnings = TRUE)
 
 
-
+blind_transform <- FALSE #should the rlog transformation be blind
 
 ########################################################################################
 ## #read in data, extract coding genes counts 
@@ -133,16 +135,58 @@ dds <- dds[keep,] #filter dds
 ##############################################################################################
 #run DESeq analysis - normalization and filtering
 dds <- DESeq(dds)
-res <- results(dds, alpha=0.05) #use alpha of 0.05
-summary(res)
-results_per_contrast <- results(dds, alpha=0.05, contrast="condition_PARPi_vs_CTRL") #use alpha of 0.05
-contrast_input="condition_PARPi_vs_CTRL"
+# res <- results(dds, alpha=0.05) #use alpha of 0.05
+# summary(res)
+# results_per_contrast <- results(dds, alpha=0.05, contrast="condition_PARPi_vs_CTRL") #use alpha of 0.05
+# contrast_input="condition_PARPi_vs_CTRL"
+#results_per_contrast <- results(dds, alpha=0.05, contrast=c("condition", "PARPi" ,"CTRL"))
+# resultsNames(results_per_contrast)
+# res_test <- lfcShrink(dds, 
+#      coef = 2, #apeglm only works with `coef` argument`
+#      type = "apeglm"
+#      )	
+
+# Transform counts for data visualization
+rld <- rlog(dds, 
+	    blind=blind_transform)
+
+# Plot PCA 
+pltPCA_samples <- plotPCA(rld, 
+	intgroup=c("condition", "samples"))
+ggsave(pltPCA_samples, file = paste0("figures/PCA_by_condition_and_samples.pdf"), width = 12, height = 12)
+
+
+
+
+
+# Extract the rlog matrix from the object and compute pairwise correlation values
+rld_mat <- assay(rld)
+rld_cor <- cor(rld_mat)
+
+#save a copy of the rlog matrix
+fwrite(rld_mat, file=paste0("data/DESeq2_rlog_Transform_Blind",blind_transform,".tsv"), sep="\t")
+
+
+
+# Plot heatmap
+pltHeatmap_samples <- pheatmap(rld_cor, 
+	 annotation = metadata_rown_df[,c("condition"), drop = FALSE])
+ggsave(pltHeatmap_samples, file = paste0("figures/heatmap_conditions.pdf"), width = 12, height = 12)
+
+res_rld_mat_df <- rld_mat %>%
+  data.frame() %>%
+  rownames_to_column(var="gene.id") %>% 
+  as_tibble()
+
+res_rld_mat_df_pivtLonger <- res_rld_mat_df %>% pivot_longer(!c("gene.id"), names_to = "samples", values_to = "rlog_transformed_counts")
+head(res_rld_mat_df_pivtLonger)
+
 
 #####################################################################################################################
 ############################### Step 3; Run deseq2 analysis for each contrast
 #####################################################################################################################
 DEResults_ls <- list()
-run_multiple_contrasts <- function(contrast_input, dseqObject = dds, shrink = FALSE, padj = 0.05){
+run_multiple_contrasts <- function(contrast_input, dseqObject = dds, shrink = FALSE, padj_val = 0.05){
 
 #contrast_label <- paste(contrast_input, collapse = "_") #used for plot labels
 str_vec <- gsub("_vs_", "_", contrast_input); 
@@ -150,36 +194,41 @@ contrast_as_vect <- unlist(str_split(str_vec, pattern="_"))
 
 #run DESeq analysis - normalization and filtering
 
-results_per_contrast <- results(dseqObject, alpha=padj, contrast=contrast_as_vect) #use alpha of 0.05
+results_per_contrast <- results(dseqObject, alpha=padj_val, contrast=contrast_as_vect) #use alpha of 0.05
 #messsage(resultsNames(results_per_contrast))
 # Shrink the log2 fold changes to be more accurate
 if(shrink == TRUE){
-results_per_contrast <- lfcShrink(dds, 
-     contrast=contrast_as_vect, 
-     type = "apeglm")	 
+res <- lfcShrink(dds, 
+    #  contrast=contrast_as_vect, 
+     coef = contrast_as_vect, #apeglm only works with `coef` argument`
+     type = "apeglm"
+     )	 
      # The coef will be dependent on what your contras was. and should be identical to what
 }
 
 dir.create(paste0("data/", contrast_input, "/"), recursive = TRUE, showWarnings = TRUE)
 dir.create(paste0("figures/", contrast_input, "/"), recursive = TRUE, showWarnings = TRUE)
 
+# pdf("MA_plot_lfcShrink_dmso_vrs_all_treated.pdf")
+# plotMA(res, ylim=c(-2,2))
+# dev.off()
+
+
+
+
 saveRDS(results_per_contrast, file=paste0("data/",contrast_input,"/Dseq2ResultsObject_",contrast_input,"_padjust.rds"))
 
 DeSeq2Results_df <- as.data.frame(results_per_contrast) %>% rownames_to_column("gene.id")
-# head(DeSeq2Results_df)
-#DeSeq2Results_df <- DeSeq2Results_df %>% rownames_to_column(var = "ensembl.gene.id")
 DeSeq2Results_df_annot <- left_join(DeSeq2Results_df, annot %>% dplyr::select(c(gene.id, gene.symbol, description,  entrez.gene.id)), by="gene.id") #merge gene annotations and deseq results
-# head(DeSeq2Results_df_annot)
-# #sum(is.na(DeSeq2Results_df_annot$gene.symbol))
-# head(DeSeq2Results_df_annot)
+write.table(DeSeq2Results_df_annot, file = paste0("data/",contrast_input,"/Dseq2Results_",contrast_input,".tsv"), sep = "\t", row.names = FALSE, col.names = TRUE) #save deseq results with annotation as table
 
 #### do volcano plots
 plt_volc_pval <- EnhancedVolcano(DeSeq2Results_df_annot,
     lab = DeSeq2Results_df_annot$gene.symbol,
     x = 'log2FoldChange',
     y = 'pvalue',
-    pCutoff = padj,
-    title = paste0(contrast_input," (p < ", padj, ")"),
+    pCutoff = padj_val,
+    title = paste0(contrast_input," (p < ", padj_val, ")"),
     pointSize = 1, labSize = 5,
     colAlpha = 0.2) +
     theme(plot.subtitle = element_blank())
@@ -191,8 +240,8 @@ plt_volc_padjust <- EnhancedVolcano(DeSeq2Results_df_annot_padjustOnly,
     lab = DeSeq2Results_df_annot_padjustOnly$gene.symbol,
     x = 'log2FoldChange',
     y = 'pvalue',
-    pCutoff = padj,
-    title = paste0(contrast_input," (BH <", padj, ")"),
+    pCutoff = padj_val,
+    title = paste0(contrast_input," (BH <", padj_val, ")"),
     widthConnectors = 0.75,
     labSize = 4.0,
     drawConnectors = TRUE,
@@ -203,28 +252,58 @@ plt_volc_padjust <- EnhancedVolcano(DeSeq2Results_df_annot_padjustOnly,
     
 ggsave(plt_volc_padjust, file = paste0("figures/",contrast_input,"/volcano_",contrast_input,"_padjust.pdf"))
 
-
-
 #### Identifying significant genes
 # Subset to return genes with padj < 0.05
 sigLRT_genes <- DeSeq2Results_df_annot %>% 
-  dplyr::filter(padj < padj)
+  dplyr::filter(padj < padj_val)
 
 # Get number of significant genes
-nrow(sigLRT_genes)
+# nrow(sigLRT_genes)
+# print(head(sigLRT_genes))
+# sigLRT_genes$gene.symbol
 
-# Compare to numbers we had from Wald test
-# nrow(sigOE)
-# nrow(sigKD)
+sig_genes_merged_with_rlog <- sigLRT_genes %>% dplyr::select(c(gene.symbol, gene.id)) %>% left_join(res_rld_mat_df_pivtLonger, by="gene.id")
+
+
+# # Make heatmap of significant genes
+heatmap_DE_sig_plot <- ggplot(sig_genes_merged_with_rlog, 
+                          aes(x=samples, y=gene.symbol, fill=rlog_transformed_counts)) + 
+                            geom_raster() + scale_fill_viridis() + 
+                            labs(title = paste0("Heatmap of Differentially Gene Expression ", contrast_input)) + 
+                              theme(axis.text.x=element_text(angle=65, hjust=1), 
+                                    legend.position = "top")
+
+ggsave(heatmap_DE_sig_plot, file = paste0("figures/",contrast_input,"/Heatmap_sig_DE",contrast_input,"_padjust",padj_val,".pdf"))
+
+
+sig_genes_ids_merged_with_rlog <- sigLRT_genes %>% dplyr::select(c(gene.symbol, gene.id)) %>% 
+                                            inner_join(res_rld_mat_df, by="gene.id") #%>% 
+                                                                        #dplyr::select(gene.id)
+#head(sig_genes_ids_merged_with_rlog)
+rlog_4Clustering <- sig_genes_ids_merged_with_rlog %>% dplyr::select(!c(gene.id))
+rownames(rlog_4Clustering) <- make.names(rlog_4Clustering[,1], unique = TRUE)
+rlog_4Clustering <- rlog_4Clustering %>% dplyr::select(!"gene.symbol")
+rlog_4Clustering_matrix <- data.matrix(rlog_4Clustering)
+
+annot_coldf <- as.data.frame(colData(dds)[,"condition", drop=FALSE])
+
+
+pdf(file = paste0("figures/",contrast_input,"/Clustering_sig_DE",contrast_input,"_padjust",padj_val,".pdf"))
+pheatmap(rlog_4Clustering_matrix, main = paste0("Clustering of Sig DGE ", contrast_input), annotation_col=annot_coldf)
+dev.off()
+
+
 return(results_per_contrast) #return results for specific contrasts
 }
 
 
+################################################################################################
+############################### Step #; Run DE for each contrast
+##############################################################################################
 #run for all contrasts
-DEResults_ls <- lapply(contrasts_ls[1], function(x) run_multiple_contrasts(contrast_input=x, dseqObject = dds))
-names_contrasts_ls <- unlist(lapply(contrasts_ls, function(x) paste0(x, collapse = "_")))
-names(DEResults_ls) <- names_contrasts_ls
-
+DEResults_ls <- lapply(contrasts_ls[1], function(x) run_multiple_contrasts(contrast_input=x, dseqObject = dds, shrink = FALSE))
+names(DEResults_ls) <- contrasts_ls[1]
+#summary(DEResults_ls[[1]])
 
 
 
@@ -397,19 +476,3 @@ names(h_gsea[[1]][["rankedFC"]])
 # slotnames(h_gsea)
 # slotNames(h_gsea)
 
-edox <- setReadable(c2_gsea[[1]], 'org.Hs.eg.db', 'ENTREZID')
-
-tst <- h_gsea[[1]][["rankedFC"]]
-#do gene set enrichment using GO
-gse <- gseGO(geneList=tst, 
-             ont ="ALL", 
-             keyType = "ENTREZID", 
-              eps = 0,
-             minGSSize = 3, 
-             maxGSSize = 800, 
-             pvalueCutoff = 0.05, 
-             verbose = TRUE, 
-             OrgDb = "org.Hs.eg.db", 
-             pAdjustMethod = "none")
-             
-            #  org.Hs.eg.db
