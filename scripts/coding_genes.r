@@ -36,7 +36,6 @@ annot <- fread(paste0(source_dir,'annot.tsv'))
 counts_annot <- fread(paste0(source_dir,'CT/counts_annot.tsv'))
 cts <- fread(paste0(source_dir,'CT/counts.tsv'))
 
-
 #get protein coding genes only
 gs.coding_ids <- annot[gene.type=="protein_coding",.(gene.id)]
 cts_coding_df <- cts[gs.coding_ids, on = "gene.id"] %>% as.data.frame()
@@ -64,42 +63,68 @@ gs.rep <- annot %>% dplyr::filter(chr == "REP") %>%
 
 
 ########################################################################################
-### Step 2; create sample metadata
+### Step 2; get sample metadata
 ########################################################################################
-#read coldata 
-samples_df <- read.delim(paste0(source_dir,'sample_list'), header = FALSE)
-names(samples_df) <- "condition"
+#note; we assume you already have sample metadata file saved some where
+metadata_df <- read.delim('data/sample_metadata.tsv', header = TRUE)
+#metadata_df; needs 3 columns; samples-sample names matching rna-seq sample list, condition - treatment/ctrl, new_samples_name - new sample names
+#rename  samples = 
 
-samples_df %<>% dplyr::filter(!condition == "veh_2") #remove `veh_2` after pca 
+#Assign new sample names
+cond_assign_new_sample_names = ncol(metadata_df) > 2 & any(str_detect(names(metadata_df), "new_samples_name"))
+if(cond_assign_new_sample_names){
+idx_samples <- match(metadata_df$samples, colnames(cts_coding)) #check if samples match
+names(cts_coding) <- metadata_df[,"new_samples_name"][idx_samples]
+
+metadata_rown_df <- metadata_df %>% column_to_rownames("new_samples_name")
+
+}
+
+metadata_rown_df <- metadata_df %>% column_to_rownames("samples")
 
 
-cases <- paste0(rep("Parp_", 3), c(1,2,3))
-ctrls <- paste0(rep("Ctrl_", 2), c(4,5))
-sampleNamesMethy <- c(cases, ctrls)
-rownames(samples_df) <- sampleNamesMethy #add rownames
+##exclude samples from dseq analysis
+# cts_coding <- cts_coding %>% dplyr::select(!veh_2) #remove outlier samples `veh_2`
+##########################
+#function to make dseq object
+make_dseq_obj <- function(ref_col = NULL){
+if(any(str_detect(names(metadata_rown_df), "condition"))){
+    message("using condition column to assign samples to groups")
 
-samples_df <- samples_df %>% mutate(samples = condition, condition = sub("_.*","",condition),
-                        condition = case_when(condition == "treat" ~ "PARP",
-                                              condition == "veh" ~ "CTRL"),
-                        condition = factor(condition, levels = c("CTRL", "PARP")))
-
-##merge expresssion and sample metadata
-cts_coding <- cts_coding %>% dplyr::select(!veh_2) #remove outlier samples `veh_2`
-head(cts_coding)
-idx_sampls <- match(samples_df$samples, colnames(cts_coding)) #check if samples match
-names(cts_coding) <- rownames(samples_df)[idx_sampls]
+metadata_rown_df$condition <- factor(metadata_rown_df$condition)
 
 dds <- DESeqDataSetFromMatrix(countData = cts_coding,
-                              colData = samples_df,
+                              colData = metadata_rown_df,
                               design = ~ condition)
+                              
 #reset levels
-dds$condition <- relevel(dds$condition, ref = "CTRL")
+message("setting CTRL as reference group")
+dds$condition <- relevel(dds$condition, ref = ref_col)
+
+#create contrast and run for all for all contrasts
+#ref_col = "CTRL"
+cond_levels <- levels(dds$condition) #get condition levels
+#cond_levels <- c(cond_levels, "treat_2")
+cond_case_level <- cond_levels[!grepl(ref_col, cond_levels)] #take non-base levels in conditions
+contrasts_ls <- paste0("condition_", cond_case_level, "_vs_", ref_col)
 
 
+out_dseq <- list(constrasts = contrasts_ls, dSeqObj = dds)
+return(out_dseq)
+}
+
+}
+
+#create dseq object and extract contrasts
+dseq_func_out <- make_dseq_obj(ref_col = "CTRL")
+dds <- dseq_func_out[["dSeqObj"]]
+contrasts_ls <- dseq_func_out[["constrasts"]]
+
+################################################################################################
 ##pre - filtering
 keep <- rowSums(counts(dds)) >= 10 #keep only counts where rowSums is above 10
 dds <- dds[keep,] #filter dds
-head(counts(dds))
+# head(counts(dds))
 
 
 
@@ -110,37 +135,35 @@ head(counts(dds))
 dds <- DESeq(dds)
 res <- results(dds, alpha=0.05) #use alpha of 0.05
 summary(res)
-
-#run for all contrasts
-contrasts_ls <- lapply(resultsNames(dds)[-1], function(x){x <- gsub("_vs_", "_", x); str_vc <- unlist(str_split(x, pattern="_")); return(str_vc)})
-paste(contrasts_ls[[1]], collapse = "_")
-
-
-
-
+results_per_contrast <- results(dds, alpha=0.05, contrast="condition_PARPi_vs_CTRL") #use alpha of 0.05
+contrast_input="condition_PARPi_vs_CTRL"
 
 #####################################################################################################################
 ############################### Step 3; Run deseq2 analysis for each contrast
 #####################################################################################################################
 DEResults_ls <- list()
 run_multiple_contrasts <- function(contrast_input, dseqObject = dds, shrink = FALSE, padj = 0.05){
-#run DESeq analysis - normalization and filtering
-contrast_label <- paste(contrast_input, collapse = "_") #used for plot labels
 
-results_per_contrast <- results(dseqObject, alpha=padj, contrast=contrast_input) #use alpha of 0.05
-print(resultsNames(results_per_contrast))
+#contrast_label <- paste(contrast_input, collapse = "_") #used for plot labels
+str_vec <- gsub("_vs_", "_", contrast_input); 
+contrast_as_vect <- unlist(str_split(str_vec, pattern="_"))
+
+#run DESeq analysis - normalization and filtering
+
+results_per_contrast <- results(dseqObject, alpha=padj, contrast=contrast_as_vect) #use alpha of 0.05
+#messsage(resultsNames(results_per_contrast))
 # Shrink the log2 fold changes to be more accurate
 if(shrink == TRUE){
 results_per_contrast <- lfcShrink(dds, 
-     contrast=contrast_input, 
+     contrast=contrast_as_vect, 
      type = "apeglm")	 
      # The coef will be dependent on what your contras was. and should be identical to what
 }
 
-dir.create("data", showWarnings = FALSE)
-dir.create("figures", showWarnings = FALSE)
+dir.create(paste0("data/", contrast_input, "/"), recursive = TRUE, showWarnings = TRUE)
+dir.create(paste0("figures/", contrast_input, "/"), recursive = TRUE, showWarnings = TRUE)
 
-saveRDS(results_per_contrast, file=paste0("data/Dseq2ResultsObject_",contrast_label,"_padjust.rds"))
+saveRDS(results_per_contrast, file=paste0("data/",contrast_input,"/Dseq2ResultsObject_",contrast_input,"_padjust.rds"))
 
 DeSeq2Results_df <- as.data.frame(results_per_contrast) %>% rownames_to_column("gene.id")
 # head(DeSeq2Results_df)
@@ -155,12 +178,12 @@ plt_volc_pval <- EnhancedVolcano(DeSeq2Results_df_annot,
     lab = DeSeq2Results_df_annot$gene.symbol,
     x = 'log2FoldChange',
     y = 'pvalue',
-    pCutoff = 0.05,
-    title = paste0(contrast_label,' (p < 0.05)'),
+    pCutoff = padj,
+    title = paste0(contrast_input," (p < ", padj, ")"),
     pointSize = 1, labSize = 5,
     colAlpha = 0.2) +
     theme(plot.subtitle = element_blank())
-ggsave(plt_volc_pval, file = paste0("figures/volcano_",contrast_label,"_pvals.pdf"))
+ggsave(plt_volc_pval, file = paste0("figures/",contrast_input,"/volcano_",contrast_input,"_pvals.pdf"))
 
 #with adjusted p - values
 DeSeq2Results_df_annot_padjustOnly <- DeSeq2Results_df_annot %>% dplyr::select(!pvalue) %>% mutate(pvalue = padj) #recreate data frame for ploting
@@ -168,8 +191,8 @@ plt_volc_padjust <- EnhancedVolcano(DeSeq2Results_df_annot_padjustOnly,
     lab = DeSeq2Results_df_annot_padjustOnly$gene.symbol,
     x = 'log2FoldChange',
     y = 'pvalue',
-    pCutoff = 0.05,
-    title = paste0(contrast_label,' (BH < 0.05)'),
+    pCutoff = padj,
+    title = paste0(contrast_input," (BH <", padj, ")"),
     widthConnectors = 0.75,
     labSize = 4.0,
     drawConnectors = TRUE,
@@ -178,7 +201,7 @@ plt_volc_padjust <- EnhancedVolcano(DeSeq2Results_df_annot_padjustOnly,
     #labSize = 5,
     colAlpha = 0.2) + theme(plot.subtitle = element_blank())
     
-ggsave(plt_volc_padjust, file = paste0("figures/volcano_",contrast_label,"_padjust.pdf"))
+ggsave(plt_volc_padjust, file = paste0("figures/",contrast_input,"/volcano_",contrast_input,"_padjust.pdf"))
 
 
 
@@ -198,12 +221,21 @@ return(results_per_contrast) #return results for specific contrasts
 
 
 #run for all contrasts
-DEResults_ls <- lapply(contrasts_ls, function(x) run_multiple_contrasts(contrast_input=x, dseqObject = dds))
+DEResults_ls <- lapply(contrasts_ls[1], function(x) run_multiple_contrasts(contrast_input=x, dseqObject = dds))
 names_contrasts_ls <- unlist(lapply(contrasts_ls, function(x) paste0(x, collapse = "_")))
 names(DEResults_ls) <- names_contrasts_ls
 
 
-#lapply(names_contrasts_ls, function(x) print(paste0(x, " ", dim(DEResults_ls[[x]]))))
+
+
+
+
+
+
+
+
+
+
 ################################################################################################
 ############################### Step #; GSEA
 ##############################################################################################
