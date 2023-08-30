@@ -16,11 +16,12 @@ library(cowplot)
 library(ggfortify)
 library(clusterProfiler)
 
+#/juno/work/greenbaum/projects/TRI_EPIGENETIC/RNASeq_DE_TriEpi
 ########################################################################################
 # set prroject  parameters
 ########################################################################################
 #set wehere count data are;
-source_dir = "/work/greenbaum/projects/RNA_seq_pipeline/projects/Project_13727_B/" 
+source_dir = "/juno/work/greenbaum/projects/TRI_EPIGENETIC/results/RNA_seq/" 
 #proj_name = "2023_BRCA_PARP_DESeq2" #project name
 
 message("workig dir is - ", getwd())
@@ -30,7 +31,8 @@ dir.create(paste0("data/"), recursive = TRUE, showWarnings = TRUE)
 
 
 blind_transform <- FALSE #should the rlog transformation be blind
-drop_samples <- c("veh_2") #samples to drop from analysis
+drop_samples <- NULL #samples to drop from analysis
+ref_variable = "DMSO"
 ########################################################################################
 ## #read in data, extract coding genes counts 
 ########################################################################################
@@ -43,7 +45,7 @@ cts <- fread(paste0(source_dir,'CT/counts.tsv'))
 gs.coding_ids <- annot[gene.type=="protein_coding",.(gene.id)]
 cts_coding_df <- cts[gs.coding_ids, on = "gene.id"] %>% as.data.frame()
 cts_coding <- cts_coding_df %>% column_to_rownames(var = "gene.id") # #convert colnames to rowids
-
+head(cts_coding)
 #### repeat landscape
 gs.rep <- annot %>% dplyr::filter(chr == "REP") %>% 
     dplyr::select(c(gene.id, gene.type)) %>% 
@@ -69,7 +71,7 @@ gs.rep <- annot %>% dplyr::filter(chr == "REP") %>%
 ### Step 2; get sample metadata
 ########################################################################################
 #note; we assume you already have sample metadata file saved some where
-metadata_df <- read.delim('data/sample_metadata.tsv', header = TRUE)
+metadata_df <- read.csv(file = paste0(source_dir,'metadata_triplicates.csv'),sep="," ,header = TRUE)
 #metadata_df; needs 3 columns; samples-sample names matching rna-seq sample list, condition - treatment/ctrl, new_samples_name - new sample names
 #rename  samples = 
 
@@ -134,7 +136,7 @@ return(out_dseq)
 }
 
 #create dseq object and extract contrasts
-dseq_func_out <- make_dseq_obj(ref_col = "CTRL")
+dseq_func_out <- make_dseq_obj(ref_col = ref_variable)
 dds <- dseq_func_out[["dSeqObj"]]
 contrasts_ls <- dseq_func_out[["constrasts"]]
 
@@ -175,9 +177,10 @@ ggsave(pltPCA_samples, file = paste0("figures/PCA_by_condition_and_samples.pdf")
 # Extract the rlog matrix from the object and compute pairwise correlation values
 rld_mat <- assay(rld)
 rld_cor <- cor(rld_mat)
+rld_df <- rld_mat %>% as.data.frame() %>% rownames_to_column("gene.id")
 
 #save a copy of the rlog matrix
-fwrite(rld_mat %>% data.frame(), file=paste0("data/DESeq2_rlog_Transform_Blind",blind_transform,".tsv"), sep="\t")
+fwrite(rld_df, file=paste0("data/DESeq2_rlog_Transform_Blind",blind_transform,".tsv"), sep="\t")
 
 
 
@@ -187,7 +190,7 @@ pltHeatmap_samples <- pheatmap(rld_cor,
 ggsave(pltHeatmap_samples, file = paste0("figures/heatmap_conditions.pdf"), width = 12, height = 12)
 
 res_rld_mat_df <- rld_mat %>%
-  data.frame() %>%
+  as.data.frame() %>%
   rownames_to_column(var="gene.id") %>% 
   as_tibble()
 
@@ -202,7 +205,7 @@ res_rld_mat_df_pivtLonger <- res_rld_mat_df %>% pivot_longer(!c("gene.id"), name
 # #idx_samples <- c(idx_samples, "Ctrl_4")
 # dds_copy_subset <- dds_copy[,idx_samples]
 # dds_copy_subset <- DESeq(dds_copy_subset)
-# contrast_input <- "PARPi_vs_CTRL" #uncomment to test run function
+# contrast_input <- "condition_AZCT_vs_DMSO" #uncomment to test run function
 
 # metadata(dds_copy)
 # elementMetadata(dds_copy)
@@ -221,6 +224,8 @@ dir.create(paste0("figures/", contrast_input, "/"), recursive = TRUE, showWarnin
 str_vec <- gsub("_vs_", "_", contrast_input); 
 contrast_as_vect <- unlist(str_split(str_vec, pattern="_"))
 
+message("using constrast")
+print(contrast_as_vect)
 # dseqObject <- dseqObject[,-idx]
 
 
@@ -230,6 +235,8 @@ dseqObject_copy <- dseqObject
 colDat <- colData(dseqObject_copy) %>% as.data.frame()
 idx_samples <- colDat %>% dplyr::filter(condition %in% contrast_as_vect) %>% rownames_to_column("samples.id") %>% pull("samples.id")
 dds_copy_subset <- dseqObject_copy[,idx_samples]
+dds_copy_subset$condition <- droplevels(dds_copy_subset$condition)
+dds_copy_subset$condition <- relevel(dds_copy_subset$condition, ref = contrast_as_vect[3]) #relevel with last element in contrast vector
 dds_copy_subset <- DESeq(dds_copy_subset)
 
 
@@ -308,7 +315,7 @@ ggsave(plt_volc_padjust, file = paste0("figures/",contrast_input,"/volcano_",con
 # Subset to return genes with padj < 0.05
 sigLRT_genes <- DeSeq2Results_df_annot %>% 
   dplyr::filter(padj < padj_val)
-
+# dim(sigLRT_genes)
 # Get number of significant genes
 # nrow(sigLRT_genes)
 # print(head(sigLRT_genes))
@@ -337,8 +344,8 @@ rownames(rlog_4Clustering) <- make.names(rlog_4Clustering[,1], unique = TRUE)
 rlog_4Clustering <- rlog_4Clustering %>% dplyr::select(!"gene.symbol")
 rlog_4Clustering_matrix <- data.matrix(rlog_4Clustering)
 
-annot_coldf <- as.data.frame(colData(dds)[,"condition", drop=FALSE])
-
+annot_coldf <- as.data.frame(colData(dseqObject)[,"condition", drop=FALSE])
+head(annot_coldf)
 
 pdf(file = paste0("figures/",contrast_input,"/Clustering_sig_DE",contrast_input,"_padjust",padj_val,".pdf"), width=12, height=9)
 pheatmap(rlog_4Clustering_matrix, main = paste0("Clustering of Sig DGE ", contrast_input), annotation_col=annot_coldf)
@@ -400,7 +407,8 @@ foldchanges <- sort(foldchanges, decreasing = TRUE)
 
 if(do_gse_GO){
     #do gene set enrichment using GO
-gse <- gseGO(geneList = foldchanges, 
+if(specie_type == "Homo sapiens"){
+  gse <- gseGO(geneList = foldchanges, 
              ont ="ALL", 
              keyType = "ENTREZID", 
               eps = 0,
@@ -410,6 +418,18 @@ gse <- gseGO(geneList = foldchanges,
              verbose = TRUE, 
              OrgDb = "org.Hs.eg.db", 
              pAdjustMethod = "none")
+}else if(specie_type == "Mus musculus"){
+  gse <- gseGO(geneList = foldchanges, 
+             ont ="ALL", 
+             keyType = "ENTREZID", 
+              eps = 0,
+             minGSSize = 3, 
+             maxGSSize = 800, 
+             pvalueCutoff = 0.05, 
+             verbose = TRUE, 
+             OrgDb = "org.Mm.eg.db", 
+             pAdjustMethod = "none")
+}
 dotplt_gse_GO_out <- dotplot(gse, showCategory=nCategory_2show, split=".sign") + facet_grid(~factor(.sign, levels=c('suppressed', 'activated'))) +
   theme(strip.text.x = element_text(hjust = 0.5, vjust = 0.5, size = 28, face="bold"))
     #theme(plot.title = element_text(size=22)) 
@@ -542,8 +562,8 @@ ggsave(lollipop_gsea, file = paste0("figures/",name_de_res,"/lollipop_gsea_msigd
 #paste0("figures/gsea_msigdbr_H_type_CKI_DMSO_EnrichDistrib.pdf")
 #run gsea for all contrasts
 # lapply(names_contrasts_ls, function(x) gsea_analysis(x))
-h_gsea <- lapply(contrasts_ls, function(x) gsea_analysis(x, category_tag = "H", nCategory_2show = 100, ggwidth = 15, ggheight = 12))
-c2_gsea <- lapply(contrasts_ls, function(x) gsea_analysis(x, do_gse_GO=FALSE,category_tag = "C2", ggwidth = 15, ggheight = 12))
+h_gsea <- lapply(contrasts_ls, function(x) gsea_analysis(x, specie_type="Mus musculus",category_tag = "H", nCategory_2show = 100, ggwidth = 15, ggheight = 12))
+c2_gsea <- lapply(contrasts_ls, function(x) gsea_analysis(x, specie_type="Mus musculus",do_gse_GO=FALSE, category_tag = "C2", ggwidth = 15, ggheight = 12))
 # names(h_gsea)
 # names(h_gsea[[1]][["rankedFC"]])
 
