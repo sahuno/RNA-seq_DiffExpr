@@ -5,9 +5,9 @@ library(tidyverse)
 library(EnhancedVolcano) # used for making volcano plots
 library(viridis)
 library(magrittr)
-library(pheatmap)
+library("pheatmap")
 library(data.table)
-library(ggrepel)
+library("ggrepel")
 library(ggfortify)
 library(clusterProfiler)
 library(org.Hs.eg.db)
@@ -16,25 +16,21 @@ library(cowplot)
 library(ggfortify)
 library(clusterProfiler)
 
-#/juno/work/greenbaum/projects/TRI_EPIGENETIC/RNASeq_DE_TriEpi
 ########################################################################################
 # set prroject  parameters
 ########################################################################################
 #set wehere count data are;
-source_dir = "/lila/data/greenbaum/users/ahunos/projects/Methyl2Expression/data/preprocessed/RNA_seq/" 
+source_dir = "/work/greenbaum/projects/RNA_seq_pipeline/projects/Project_13727_B/" 
 #proj_name = "2023_BRCA_PARP_DESeq2" #project name
 
-setwd("/lila/data/greenbaum/users/ahunos/projects/Methyl2Expression/scripts/apps/RNA-seq_DiffExpr/scripts/sandbox")
 message("workig dir is - ", getwd())
 #create folders in not aleady there
 dir.create(paste0("figures/"), recursive = TRUE, showWarnings = TRUE)
 dir.create(paste0("data/"), recursive = TRUE, showWarnings = TRUE)
-dir.create(paste0("figures/geneWiseNormalizedCounts"), recursive = TRUE, showWarnings = TRUE)
 
 
 blind_transform <- FALSE #should the rlog transformation be blind
-drop_samples <- NULL #samples to drop from analysis
-ref_variable = "DMSO"
+drop_samples <- c("veh_2") #samples to drop from analysis
 ########################################################################################
 ## #read in data, extract coding genes counts 
 ########################################################################################
@@ -47,9 +43,8 @@ cts <- fread(paste0(source_dir,'CT/counts.tsv'))
 gs.coding_ids <- annot[gene.type=="protein_coding",.(gene.id)]
 cts_coding_df <- cts[gs.coding_ids, on = "gene.id"] %>% as.data.frame()
 cts_coding <- cts_coding_df %>% column_to_rownames(var = "gene.id") # #convert colnames to rowids
-# head(cts_coding)
 
-####isolate repeat elements. we don't want them in differential expression for now
+#### repeat landscape
 gs.rep <- annot %>% dplyr::filter(chr == "REP") %>% 
     dplyr::select(c(gene.id, gene.type)) %>% 
       mutate(tp = case_when(str_detect(gene.type,"^(Endogenous|ERV|LTR|Lomg_terminal_repeat|Endogenous_Retrovirus)") ~ "LTR", 
@@ -74,14 +69,15 @@ gs.rep <- annot %>% dplyr::filter(chr == "REP") %>%
 ### Step 2; get sample metadata
 ########################################################################################
 #note; we assume you already have sample metadata file saved some where
-metadata_df <- read.csv(file = paste0(source_dir,'metadata_triplicates.csv'),sep="," ,header = TRUE)
+metadata_df <- read.delim('/work/greenbaum/users/ahunos/apps/RNA-seq_DiffExpr/data/sample_metadata.tsv', header = TRUE)
 #metadata_df; needs 3 columns; samples-sample names matching rna-seq sample list, condition - treatment/ctrl, new_samples_name - new sample names
-unique(metadata_df$condition_long)
 #rename  samples = 
+
 #Assign new sample names
 cond_assign_new_sample_names = ncol(metadata_df) > 2 & any(str_detect(names(metadata_df), "new_samples_name"))
 
 if(cond_assign_new_sample_names){
+
   #drop samples
 if(!is.null(drop_samples)){
 metadata_df <- metadata_df %>% dplyr::filter(!samples %in% drop_samples)
@@ -91,12 +87,15 @@ cts_coding <- cts_coding %>% dplyr::select(!all_of(drop_samples))
 #assign new sample names
 idx_samples <- match(metadata_df$samples, colnames(cts_coding)) #check if samples match
 names(cts_coding) <- metadata_df[,"new_samples_name"][idx_samples]
+
 metadata_rown_df <- metadata_df %>% column_to_rownames("new_samples_name")
+
 }else{
 #drop samples
 # if(!is.null(drop_samples)){
 # metadata_df <- metadata_df %>% dplyr::filter(!samples %in% drop_samples)
 # }
+
 metadata_rown_df <- metadata_df %>% column_to_rownames("samples")
 }
 
@@ -131,182 +130,20 @@ contrasts_ls <- paste0("condition_", cond_case_level, "_vs_", ref_col)
 out_dseq <- list(constrasts = contrasts_ls, dSeqObj = dds)
 return(out_dseq)
 }
+
 }
 
 #create dseq object and extract contrasts
-dseq_func_out <- make_dseq_obj(ref_col = ref_variable)
+dseq_func_out <- make_dseq_obj(ref_col = "CTRL")
 dds <- dseq_func_out[["dSeqObj"]]
 contrasts_ls <- dseq_func_out[["constrasts"]]
-
-#from mike love, how to normalize
-dds <- DESeq(dds)
-dds <- estimateSizeFactors(dds)
-dds_normalizedCounts <- counts(dds, normalized=TRUE)
-fwrite(as.data.table(dds_normalizedCounts), "data/dds_normalizedCounts_all_conditions.tsv")
-
-#plot gene expressions
-#1. all coding genes per sample; sample page
-#head(dds_normalizedCounts) 
-dds_normalizedCounts_long_min10 <- dds_normalizedCounts %>% as.data.frame() %>% 
-  rownames_to_column(var = "geneID") %>% 
-    pivot_longer(!geneID, names_to = "samples", values_to = "NormalizedCounts") %>% 
-      dplyr::filter(NormalizedCounts >= 10) %>% 
-      mutate(NormalizedCounts = log(NormalizedCounts))
-      
-stats_df <-  dds_normalizedCounts_long_min10 %>% 
-      group_by(samples) |>
-      summarize(n=n(), med= round(median(NormalizedCounts), 1), mu= round(mean(NormalizedCounts), 1), 
-        sd=round(sd(NormalizedCounts), 1)) |> mutate(stats = paste0("med-", med," mu-" ,mu, " sd-", sd)) |> dplyr::select(!c(n,med,  mu, sd))
-stats_df$stats <- str_wrap(stats_df$stats, width = 10)  # Adjust 'width' as needed
-
-
-dds_normalizedCounts_long <- dds_normalizedCounts %>% 
-  as.data.frame() %>% rownames_to_column(var = "geneID") %>% 
-  pivot_longer(!geneID, names_to = "samples", values_to = "NormalizedCounts") %>% 
-      mutate(NormalizedCounts = log(0.1 + NormalizedCounts))
-
-dds_normalizedCounts_long |> group_by(samples) |>
-      summarize(n=n(), min(NormalizedCounts), med= round(median(NormalizedCounts), 1), mu= round(mean(NormalizedCounts), 1), 
-        sd=round(sd(NormalizedCounts), 1))
-
-plot_NormalizedCounts <- ggplot(dds_normalizedCounts_long, aes(NormalizedCounts)) + geom_freqpoly() + 
-  facet_wrap(~samples) + labs(title = "log(0.1+Normalized read counts) per sample including 0 Expr") + 
-  theme_minimal() + theme(axis.text.x = element_text(angle = 45))
-ggsave(plot_NormalizedCounts, file = "figures/freqpoly_NormalizedCounts.pdf") 
-
-#plot samples gene expression with min10 genes expressed
-plot_NormalizedCounts_min10 <- ggplot(dds_normalizedCounts_long_min10, aes(NormalizedCounts)) + 
-  geom_freqpoly() + facet_wrap(~samples) + 
-  geom_text(data=stats_df, mapping = aes(x = -Inf, y = -Inf, label = stats),
-  hjust   = -0.1, vjust   = -1, size=3 ) + 
-  labs(title = "log(>=10 normalized read counts) per sample", y = "counts") + 
-  theme_minimal() + 
-  theme(axis.text.x = element_text(angle = 45))
-ggsave(plot_NormalizedCounts_min10, file = "figures/freqpoly_NormalizedCounts_min10.pdf") 
-
-#add sample metadata 
-dds_normalizedCounts_long_metadata <- dds_normalizedCounts_long %>% 
-  left_join(as.data.frame(metadata_rown_df) %>% 
-    mutate(samples = str_replace_all(samples, "\\.", "-"))) 
-
-#dds_normalizedCounts_long_metadata %>% dplyr::group_by(condition, samples) %>% summarize(n())
-
-plot_NormalizedCounts_groups <- ggplot(dds_normalizedCounts_long_metadata, 
-  aes(NormalizedCounts, color = samples)) + 
-    geom_freqpoly() +
-    facet_wrap(~condition) +
-  scale_fill_brewer(palette = "Dark2", name = "condition") + 
-  labs(title = "log(0.1 + normalized read counts) per sample", y = "counts") + 
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45)) 
-ggsave(plot_NormalizedCounts_groups, file = "figures/freqpoly_NormalizedCounts_conditions.pdf") 
-#aes(alpha = samples)
-
-plot_NormalizedCounts_groupsall <- ggplot(dds_normalizedCounts_long_metadata, 
-  aes(NormalizedCounts, color = condition)) + 
-    geom_freqpoly(aes(alpha = samples)) + 
-  scale_fill_brewer(palette = "Dark2", name = "condition") + 
-  labs(title = "log(0.1+Normalized read counts)") + 
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45))
-ggsave(plot_NormalizedCounts_groupsall, file = "figures/freqpoly_NormalizedCounts_all_conditions.pdf") 
-
-
-##plot each genes expression 
-data_filtered <- dds_normalizedCounts_long_metadata %>% dplyr::filter(NormalizedCounts >= log(10)) 
-data_filtered <- data_filtered %>% left_join(annot %>% dplyr::select(c(`gene.id`,`gene.symbol`)), by = c("geneID" = "gene.id")) %>%
-mutate(geneID = paste0(`gene.symbol`,"_",geneID))
-
-data2Save <- dds_normalizedCounts_long_metadata %>% left_join(annot %>% dplyr::select(c(`gene.id`,`gene.symbol`)), by = c("geneID" = "gene.id")) %>%
-mutate(geneID = paste0(`gene.symbol`,"_",geneID))
-fwrite(as.data.table(data2Save), "data/dds_normalizedCounts_with_annot_all_samples.tsv")
-
-
-
-plot_genes <- function(geneID){
-  data_in <- data_filtered %>% dplyr::filter(geneID == {{geneID}})
-print(geneID)
-plt_point <- ggplot(data = data_in) + 
-geom_point(aes(x=samples, y=NormalizedCounts, color=condition)) + labs(title = geneID)+
-scale_colour_brewer(palette="Dark2")+
-labs(title = paste0("",geneID),
-y = "log(0.1 + >10 Normalized Counts)")+
-theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45))
-
-plt_hist <- ggplot(data = data_in %>% 
-dplyr::filter(geneID == geneID)) + 
-geom_histogram(aes(NormalizedCounts)) + 
-labs(title = paste0("Per Gene dist across samples"), x = "log(Normalized Counts)") +
-#labs(title = "ENSMUSG00000000001.4; all samples") +
-theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45))
-
-#merge plots for visualization
-plt_point_hist <- plot_grid(plt_point, plt_hist)
-ggsave(plt_point_hist, file = paste0("figures/geneWiseNormalizedCounts/",geneID,"_point_hist.pdf"), width = 9 , height = 5) 
-}
-
-#plot for all genes
-#geneList <- head(unique(data_filtered$geneID))
-# geneList <- unique(data_filtered$geneID)
-# walk(geneList, function(x){
-# plot_genes(geneID=x)
-# })
-
-# data_filtered %>% dplyr::filter(geneID == "ENSMUSG00000000049.11")
-
-#plot means of each gene
-perGene_Stats <- data_filtered %>% group_by(geneID) %>% 
-        summarize(n=n(), med= round(median(NormalizedCounts), 1), 
-                  mu= round(mean(NormalizedCounts), 1), 
-                  sd=round(sd(NormalizedCounts), 1)) |> 
-        mutate(stats = paste0("med-", med," mu-" ,mu, " sd-", sd)) 
-
-#convert to longer for scater plots        
-perGene_Stats_longer <- perGene_Stats  |> 
-        pivot_longer(!c(geneID,stats))
-        #dplyr::select(!c(n, med, mu, sd))
-perGene_Stats_longer$stats <- str_wrap(perGene_Stats_longer$stats, width = 10)  # Adjust 'width' as needed
-
-#perGene_Stats_longer  |> filter(name == "n") %>% summarize(min(value))
-
-
-plot_aggregate_conditions_normalizedCounts <- ggplot(perGene_Stats_longer, aes(value)) + 
-geom_histogram() + 
-labs(title  = "per gene statistics across samples and conditions", subtitle = "log(panels) !n") + 
-facet_wrap(~name, scales = "free") + 
-theme_minimal()
-ggsave(plot_aggregate_conditions_normalizedCounts, file = paste0("figures/","histogram_aggregate_conditions_normalizedCounts_point.pdf"), width = 9 , height = 5) 
-
-
-plot_sd_mean_per_gene_across_samples <- ggplot(perGene_Stats, aes(x=mu, y = sd)) + 
-geom_point() + labs(title  = "mu vrs sd per gene statistics across samples and conditions",
-x = "log(Gene mean across samples)",
-y  = "log(Gene sd across samples)") + 
-geom_smooth() +
-theme_minimal()
-ggsave(plot_sd_mean_per_gene_across_samples, file = paste0("figures/","mean_vrs_sd_perGene_across_samples_conditions.pdf"), width = 9 , height = 5) 
-
-
-plot_sd_median_per_gene_across_samples <- ggplot(perGene_Stats, aes(x=med, y = sd)) + 
-geom_point() + labs(title  = "median vrs sd per gene statistics across samples and conditions",
-x = "log(Gene median across samples)",
-y  = "log(Gene sd across samples)") + 
-geom_smooth() +
-theme_minimal()
-ggsave(plot_sd_median_per_gene_across_samples, file = paste0("figures/","median_vrs_sd_perGene_across_samples_conditions.pdf"), width = 9 , height = 5) 
-
-
-
-
 
 ################################################################################################
 ##pre - filtering
 keep <- rowSums(counts(dds)) >= 10 #keep only counts where rowSums is above 10
 dds <- dds[keep,] #filter dds
 # head(counts(dds))
-names(assays(dds))
+
 
 
 ################################################################################################
@@ -325,6 +162,12 @@ dds <- DESeq(dds)
 #      type = "apeglm"
 #      )	
 
+#save normalizeds counts
+dds <- estimateSizeFactors(dds)
+normalized_counts <- counts(dds, normalized=TRUE)
+write.table(normalized_counts, file="data/normalized_counts.txt", sep="\t", quote=F, col.names=NA)
+
+
 # Transform counts for data visualization
 rld <- rlog(dds, 
 	    blind=blind_transform)
@@ -338,20 +181,19 @@ ggsave(pltPCA_samples, file = paste0("figures/PCA_by_condition_and_samples.pdf")
 # Extract the rlog matrix from the object and compute pairwise correlation values
 rld_mat <- assay(rld)
 rld_cor <- cor(rld_mat)
-rld_df <- rld_mat %>% as.data.frame() %>% rownames_to_column("gene.id")
 
 #save a copy of the rlog matrix
-fwrite(rld_df, file=paste0("data/DESeq2_rlog_Transform_Blind",blind_transform,".tsv"), sep="\t")
+fwrite(rld_mat %>% data.frame(), file=paste0("data/DESeq2_rlog_Transform_Blind",blind_transform,".tsv"), sep="\t")
 
 
 
-# Plot heatmaps
+# Plot heatmap
 pltHeatmap_samples <- pheatmap(rld_cor, 
-	 annotation = metadata_rown_df[,c("condition"), scale = "row", drop = FALSE])
+	 annotation = metadata_rown_df[,c("condition"), drop = FALSE])
 ggsave(pltHeatmap_samples, file = paste0("figures/heatmap_conditions.pdf"), width = 12, height = 12)
 
 res_rld_mat_df <- rld_mat %>%
-  as.data.frame() %>%
+  data.frame() %>%
   rownames_to_column(var="gene.id") %>% 
   as_tibble()
 
@@ -366,7 +208,7 @@ res_rld_mat_df_pivtLonger <- res_rld_mat_df %>% pivot_longer(!c("gene.id"), name
 # #idx_samples <- c(idx_samples, "Ctrl_4")
 # dds_copy_subset <- dds_copy[,idx_samples]
 # dds_copy_subset <- DESeq(dds_copy_subset)
-# contrast_input <- "condition_AZCT_vs_DMSO" #uncomment to test run function
+# contrast_input <- "PARPi_vs_CTRL" #uncomment to test run function
 
 # metadata(dds_copy)
 # elementMetadata(dds_copy)
@@ -375,10 +217,9 @@ res_rld_mat_df_pivtLonger <- res_rld_mat_df %>% pivot_longer(!c("gene.id"), name
 #####################################################################################################################
 ############################### Step 3; Run deseq2 analysis for each contrast
 #####################################################################################################################
-
 DEResults_ls <- list()
 run_multiple_contrasts <- function(contrast_input, dseqObject = dds, shrink = FALSE, padj_val = 0.05, export_transformed_counts = FALSE){
-  nessage("analyzing ", contrast_input)
+
 dir.create(paste0("data/", contrast_input, "/"), recursive = TRUE, showWarnings = TRUE)
 dir.create(paste0("figures/", contrast_input, "/"), recursive = TRUE, showWarnings = TRUE)
 
@@ -386,49 +227,60 @@ dir.create(paste0("figures/", contrast_input, "/"), recursive = TRUE, showWarnin
 str_vec <- gsub("_vs_", "_", contrast_input); 
 contrast_as_vect <- unlist(str_split(str_vec, pattern="_"))
 
-#print(contrast_as_vect)
-#export Transform counts for data visualization
-message("using constrast")
+# dseqObject <- dseqObject[,-idx]
+
+
+# export Transform counts for data visualization
 if(export_transformed_counts){
 dseqObject_copy <- dseqObject
 colDat <- colData(dseqObject_copy) %>% as.data.frame()
 idx_samples <- colDat %>% dplyr::filter(condition %in% contrast_as_vect) %>% rownames_to_column("samples.id") %>% pull("samples.id")
 dds_copy_subset <- dseqObject_copy[,idx_samples]
-dds_copy_subset$condition <- droplevels(dds_copy_subset$condition)
-#relevel with last element in contrast vector
-dds_copy_subset$condition <- relevel(dds_copy_subset$condition, ref = contrast_as_vect[3]) 
 dds_copy_subset <- DESeq(dds_copy_subset)
 
-rld <- rlog(dds_copy_subset,
+
+rld <- rlog(dds_copy_subset, #export data
 	    blind=TRUE)
 
 rld_mat <- assay(rld)
 rld_df <- rld_mat %>% as.data.frame() %>% rownames_to_column("gene.id")
+# head(rld_df)
 #save a copy of the rlog matrix
 write_tsv(rld_df, file=paste0("data/",contrast_input,"/DESeq2_rlog_Transform_BlindTRUE_",contrast_input,".tsv"))
 }
 
+# dt_t <- fread("/juno/work/greenbaum/users/ahunos/apps/RNA-seq_DiffExpr/data/condition_PARPi_vs_CTRL/DESeq2_rlog_Transform_BlindTRUE.tsv")
+# head(dt_t)
 #run DESeq analysis - normalization and filtering
-#use alpha of 0.05
-results_per_contrast <- results(dseqObject, alpha=padj_val, contrast=contrast_as_vect)
+
+results_per_contrast <- results(dseqObject, alpha=padj_val, contrast=contrast_as_vect) #use alpha of 0.05
 #messsage(resultsNames(results_per_contrast))
-#Shrink the log2 fold changes to be more accurate
+# Shrink the log2 fold changes to be more accurate
 if(shrink == TRUE){
-  res <- lfcShrink(dds,
-     coef = contrast_as_vect,
-     type = "apeglm")
+res <- lfcShrink(dds, 
+    #  contrast=contrast_as_vect, 
+     coef = contrast_as_vect, #apeglm only works with `coef` argument`
+     type = "apeglm"
+     )	 
+     # The coef will be dependent on what your contras was. and should be identical to what
 }
-#contrast=contrast_as_vect
+
+
+
+# pdf("MA_plot_lfcShrink_dmso_vrs_all_treated.pdf")
+# plotMA(res, ylim=c(-2,2))
+# dev.off()
+
+
+
 
 saveRDS(results_per_contrast, file=paste0("data/",contrast_input,"/Dseq2ResultsObject_",contrast_input,"_padjust.rds"))
 
 DeSeq2Results_df <- as.data.frame(results_per_contrast) %>% rownames_to_column("gene.id")
-#merge gene annotations and deseq results
-DeSeq2Results_df_annot <- left_join(DeSeq2Results_df, annot %>% dplyr::select(c(gene.id, gene.symbol, description,  entrez.gene.id)), by="gene.id")
-#save deseq results with annotation as table
-write.table(DeSeq2Results_df_annot, file = paste0("data/",contrast_input,"/Dseq2Results_",contrast_input,".tsv"), sep = "\t", row.names = FALSE, col.names = TRUE)
+DeSeq2Results_df_annot <- left_join(DeSeq2Results_df, annot %>% dplyr::select(c(gene.id, gene.symbol, description,  entrez.gene.id)), by="gene.id") #merge gene annotations and deseq results
+write.table(DeSeq2Results_df_annot, file = paste0("data/",contrast_input,"/Dseq2Results_",contrast_input,".tsv"), sep = "\t", row.names = FALSE, col.names = TRUE) #save deseq results with annotation as table
 
-####do volcano plots
+#### do volcano plots
 plt_volc_pval <- EnhancedVolcano(DeSeq2Results_df_annot,
     lab = DeSeq2Results_df_annot$gene.symbol,
     x = 'log2FoldChange',
@@ -441,8 +293,7 @@ plt_volc_pval <- EnhancedVolcano(DeSeq2Results_df_annot,
 ggsave(plt_volc_pval, file = paste0("figures/",contrast_input,"/volcano_",contrast_input,"_pvals.pdf"))
 
 #with adjusted p - values
-#recreate data frame for ploting
-DeSeq2Results_df_annot_padjustOnly <- DeSeq2Results_df_annot %>% dplyr::select(!pvalue) %>% mutate(pvalue = padj) 
+DeSeq2Results_df_annot_padjustOnly <- DeSeq2Results_df_annot %>% dplyr::select(!pvalue) %>% mutate(pvalue = padj) #recreate data frame for ploting
 plt_volc_padjust <- EnhancedVolcano(DeSeq2Results_df_annot_padjustOnly,
     lab = DeSeq2Results_df_annot_padjustOnly$gene.symbol,
     x = 'log2FoldChange',
@@ -454,41 +305,53 @@ plt_volc_padjust <- EnhancedVolcano(DeSeq2Results_df_annot_padjustOnly,
     drawConnectors = TRUE,
     ylab = bquote('-' ~Log[10]~ 'p adjusted'),
     pointSize = 1, 
+    #labSize = 5,
     colAlpha = 0.2) + theme(plot.subtitle = element_blank())
     
 ggsave(plt_volc_padjust, file = paste0("figures/",contrast_input,"/volcano_",contrast_input,"_padjust.pdf"))
 
-####Identifying significant genes
-#Subset to return genes with padj < 0.05
+#### Identifying significant genes
+# Subset to return genes with padj < 0.05
 sigLRT_genes <- DeSeq2Results_df_annot %>% 
   dplyr::filter(padj < padj_val)
 
+# Get number of significant genes
+# nrow(sigLRT_genes)
+# print(head(sigLRT_genes))
+# sigLRT_genes$gene.symbol
+
 sig_genes_merged_with_rlog <- sigLRT_genes %>% dplyr::select(c(gene.symbol, gene.id)) %>% left_join(res_rld_mat_df_pivtLonger, by="gene.id")
 
-heatmap_DE_sig_plot <- ggplot(sig_genes_merged_with_rlog,
-                          aes(x=samples, y=gene.symbol, fill=rlog_transformed_counts))+
-                            geom_raster() + scale_fill_viridis() +
-                            labs(title = paste0("Heatmap of Differentially Gene Expression ", contrast_input)) +
-                              theme(axis.text.x=element_text(angle=65, hjust=1),
+
+# # Make heatmap of significant genes
+heatmap_DE_sig_plot <- ggplot(sig_genes_merged_with_rlog, 
+                          aes(x=samples, y=gene.symbol, fill=rlog_transformed_counts)) + 
+                            geom_raster() + scale_fill_viridis() + 
+                            labs(title = paste0("Heatmap of Differentially Gene Expression ", contrast_input)) + 
+                              theme(axis.text.x=element_text(angle=65, hjust=1), 
                                     legend.position = "top")
 
 ggsave(heatmap_DE_sig_plot, file = paste0("figures/",contrast_input,"/Heatmap_sig_DE",contrast_input,"_padjust",padj_val,".pdf"))
 
 
-sig_genes_ids_merged_with_rlog <- sigLRT_genes %>% dplyr::select(c(gene.symbol, gene.id)) %>% left_join(res_rld_mat_df, by="gene.id")
+sig_genes_ids_merged_with_rlog <- sigLRT_genes %>% dplyr::select(c(gene.symbol, gene.id)) %>% 
+                                            left_join(res_rld_mat_df, by="gene.id") #%>% 
+                                                                        #dplyr::select(gene.id)
+#head(sig_genes_ids_merged_with_rlog)
 rlog_4Clustering <- sig_genes_ids_merged_with_rlog %>% dplyr::select(!c(gene.id))
 rownames(rlog_4Clustering) <- make.names(rlog_4Clustering[,1], unique = TRUE)
 rlog_4Clustering <- rlog_4Clustering %>% dplyr::select(!"gene.symbol")
 rlog_4Clustering_matrix <- data.matrix(rlog_4Clustering)
 
-annot_coldf <- as.data.frame(colData(dseqObject)[,"condition", drop=FALSE])
+annot_coldf <- as.data.frame(colData(dds)[,"condition", drop=FALSE])
+
 
 pdf(file = paste0("figures/",contrast_input,"/Clustering_sig_DE",contrast_input,"_padjust",padj_val,".pdf"), width=12, height=9)
-pheatmap(rlog_4Clustering_matrix, main = paste0("Clustering of Sig DGE ", contrast_input), scale = "row", annotation_col=annot_coldf)
+pheatmap(rlog_4Clustering_matrix, main = paste0("Clustering of Sig DGE ", contrast_input), annotation_col=annot_coldf)
 dev.off()
 
-return(results_per_contrast)
 
+return(results_per_contrast) #return results for specific contrasts
 }
 
 
@@ -496,11 +359,11 @@ return(results_per_contrast)
 ############################### Step #; Run DE for each contrast
 ##############################################################################################
 #run for all contrasts
-DEResults_ls <- lapply(contrasts_ls, function(x) {run_multiple_contrasts(contrast_input=x, dseqObject = dds, shrink = FALSE, export_transformed_counts = TRUE)})
+DEResults_ls <- lapply(contrasts_ls, function(x) run_multiple_contrasts(contrast_input=x, dseqObject = dds, shrink = FALSE, export_transformed_counts = TRUE))
 names(DEResults_ls) <- contrasts_ls
 #summary(DEResults_ls[[1]])
 # data.frame(DEResults_ls[[1]]) %>% dplyr::filter(padj < 0.05) %>% dim()
-# contrast_input=contrasts_ls[1]
+
 
 
 
@@ -543,8 +406,7 @@ foldchanges <- sort(foldchanges, decreasing = TRUE)
 
 if(do_gse_GO){
     #do gene set enrichment using GO
-if(specie_type == "Homo sapiens"){
-  gse <- gseGO(geneList = foldchanges, 
+gse <- gseGO(geneList = foldchanges, 
              ont ="ALL", 
              keyType = "ENTREZID", 
               eps = 0,
@@ -554,18 +416,6 @@ if(specie_type == "Homo sapiens"){
              verbose = TRUE, 
              OrgDb = "org.Hs.eg.db", 
              pAdjustMethod = "none")
-}else if(specie_type == "Mus musculus"){
-  gse <- gseGO(geneList = foldchanges, 
-             ont ="ALL", 
-             keyType = "ENTREZID", 
-              eps = 0,
-             minGSSize = 3, 
-             maxGSSize = 800, 
-             pvalueCutoff = 0.05, 
-             verbose = TRUE, 
-             OrgDb = "org.Mm.eg.db", 
-             pAdjustMethod = "none")
-}
 dotplt_gse_GO_out <- dotplot(gse, showCategory=nCategory_2show, split=".sign") + facet_grid(~factor(.sign, levels=c('suppressed', 'activated'))) +
   theme(strip.text.x = element_text(hjust = 0.5, vjust = 0.5, size = 28, face="bold"))
     #theme(plot.title = element_text(size=22)) 
@@ -698,8 +548,8 @@ ggsave(lollipop_gsea, file = paste0("figures/",name_de_res,"/lollipop_gsea_msigd
 #paste0("figures/gsea_msigdbr_H_type_CKI_DMSO_EnrichDistrib.pdf")
 #run gsea for all contrasts
 # lapply(names_contrasts_ls, function(x) gsea_analysis(x))
-# h_gsea <- lapply(contrasts_ls, function(x) gsea_analysis(x, specie_type="Mus musculus",category_tag = "H", nCategory_2show = 100, ggwidth = 15, ggheight = 12))
-# c2_gsea <- lapply(contrasts_ls, function(x) gsea_analysis(x, specie_type="Mus musculus",do_gse_GO=FALSE, category_tag = "C2", ggwidth = 15, ggheight = 12))
+h_gsea <- lapply(contrasts_ls, function(x) gsea_analysis(x, category_tag = "H", nCategory_2show = 100, ggwidth = 15, ggheight = 12))
+c2_gsea <- lapply(contrasts_ls, function(x) gsea_analysis(x, do_gse_GO=FALSE,category_tag = "C2", ggwidth = 15, ggheight = 12))
 # names(h_gsea)
 # names(h_gsea[[1]][["rankedFC"]])
 
@@ -707,4 +557,3 @@ ggsave(lollipop_gsea, file = paste0("figures/",name_de_res,"/lollipop_gsea_msigd
 # head(h_gsea[[1]]@result)
 # slotnames(h_gsea)
 # slotNames(h_gsea)
-
