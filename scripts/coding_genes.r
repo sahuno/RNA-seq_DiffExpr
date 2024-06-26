@@ -21,7 +21,7 @@ library(clusterProfiler)
 # set prroject  parameters
 ########################################################################################
 #set wehere count data are;
-source_dir = "/lila/data/greenbaum/users/ahunos/projects/Methyl2Expression/data/preprocessed/RNA_seq/" 
+source_dir = "/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/RNA_seq" 
 #proj_name = "2023_BRCA_PARP_DESeq2" #project name
 
 setwd("/lila/data/greenbaum/users/ahunos/projects/Methyl2Expression/scripts/apps/RNA-seq_DiffExpr/scripts/sandbox")
