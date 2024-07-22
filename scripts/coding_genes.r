@@ -13,18 +13,17 @@ library(clusterProfiler)
 library(org.Hs.eg.db)
 library(ggnewscale)
 library(cowplot)
-library(ggfortify)
-library(clusterProfiler)
+
 
 #/juno/work/greenbaum/projects/TRI_EPIGENETIC/RNASeq_DE_TriEpi
 ########################################################################################
 # set prroject  parameters
 ########################################################################################
 #set wehere count data are;
-source_dir = "/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/RNA_seq" 
+source_dir = "/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/RNA_seq/" 
 #proj_name = "2023_BRCA_PARP_DESeq2" #project name
 
-setwd("/lila/data/greenbaum/users/ahunos/projects/Methyl2Expression/scripts/apps/RNA-seq_DiffExpr/scripts/sandbox")
+setwd("/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/sandbox/")
 message("workig dir is - ", getwd())
 #create folders in not aleady there
 dir.create(paste0("figures/"), recursive = TRUE, showWarnings = TRUE)
@@ -35,6 +34,7 @@ dir.create(paste0("figures/geneWiseNormalizedCounts"), recursive = TRUE, showWar
 blind_transform <- FALSE #should the rlog transformation be blind
 drop_samples <- NULL #samples to drop from analysis
 ref_variable = "DMSO"
+smallestGroupSize <- 3
 ########################################################################################
 ## #read in data, extract coding genes counts 
 ########################################################################################
@@ -120,13 +120,20 @@ dds <- DESeqDataSetFromMatrix(countData = cts_coding,
 message("setting CTRL as reference group")
 dds$condition <- relevel(dds$condition, ref = ref_col)
 
+#add gene annotations to summarize gene expression
+message("adding gene annotations to dseq object")
+gene_ids_from_rownames <- data.frame(gene.id = rownames(cts_coding))
+merge_annot <- merge(gene_ids_from_rownames, annot, by="gene.id", all.x = TRUE)
+merge_annot$basepairs <- merge_annot$length #add gene length for fpkm normalization
+
+mcols(dds) <- DataFrame(mcols(dds), merge_annot)
+
 #create contrast and run for all for all contrasts
 #ref_col = "CTRL"
 cond_levels <- levels(dds$condition) #get condition levels
 #cond_levels <- c(cond_levels, "treat_2")
 cond_case_level <- cond_levels[!grepl(ref_col, cond_levels)] #take non-base levels in conditions
 contrasts_ls <- paste0("condition_", cond_case_level, "_vs_", ref_col)
-
 
 out_dseq <- list(constrasts = contrasts_ls, dSeqObj = dds)
 return(out_dseq)
@@ -139,14 +146,152 @@ dds <- dseq_func_out[["dSeqObj"]]
 contrasts_ls <- dseq_func_out[["constrasts"]]
 
 #from mike love, how to normalize
-dds <- DESeq(dds)
-dds <- estimateSizeFactors(dds)
-dds_normalizedCounts <- counts(dds, normalized=TRUE)
-fwrite(as.data.table(dds_normalizedCounts), "data/dds_normalizedCounts_all_conditions.tsv")
+dds <- DESeq(dds) #this command estimates the size factors and dispersion estimates
+# dds <- estimateSizeFactors(dds) #not necessary anymore 
+dds_2_filterCounts <- dds
+keep <- rowSums(counts(dds_2_filterCounts) >= 10) >= smallestGroupSize #keep only counts where rowSums is above 10
+dds_prefiltered <- dds_2_filterCounts[keep,]
+dds_prefiltered <- DESeq(dds_prefiltered) #necessary to re-run DESeq after filtering
 
+dds_normalizedCounts <- counts(dds, normalized=TRUE) #non filtered counts
+dds_normalizedCounts_dt <- as.data.table(dds_normalizedCounts) #save a copy to add gene annotations
+dt_normalizedCounts_pre_filteredCounts <- counts(dds_prefiltered, normalized=TRUE)
+
+#filter genes with at least 10 normalized counts
+dds_prefiltered[rowSums(counts(dds_prefiltered)) < 1,] #check the filtered dataset
+dds_2_filterCounts[rowSums(counts(dds_2_filterCounts)) < 1,]#yes, there were genes in original matrix with 0 counts
+
+zeroCounts_FilteredCountMatirx <- apply(counts(dds_prefiltered), 2, function(x) sum(x == 0)) #check for zero values in columns
+zeroCounts_orginalCountMatirx <- apply(counts(dds_2_filterCounts), 2, function(x) sum(x == 0)) #check for zero values in columns
+
+## save zero counts data and plot
+GenesWithZeroCounts_data = data.frame(samples = rep(names(zeroCounts_FilteredCountMatirx),2), 
+  counts = c(zeroCounts_FilteredCountMatirx, zeroCounts_orginalCountMatirx),
+  type = c(rep("filtered", 21), rep("original", 21)))
+
+plot_zeroCounts <- ggplot() + geom_bar(data = GenesWithZeroCounts_data, aes(x = samples, y = counts, fill = type), stat = "identity", position=position_dodge()) + 
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 45)) + 
+  labs(title = "Number of genes with zero counts per sample") + 
+  theme(legend.position = "top")
+
+ggsave(filename = paste0("nGenesWithZeroCounts_perSample.png"), plot_zeroCounts, width = 7, height = 10, units = "in", dpi = 300)
+
+# GenesWithZeroCounts_data
+# dt_normalizedCounts_pre_filteredCounts
+# dt_normalizedCounts_pre_filteredCounts[,min(NormalizedCounts)]
+# rowSums(dt_normalizedCounts_pre_filteredCounts >= 10)
+# dt_normalizedCounts_pre_filteredCounts[rowSums(dt_normalizedCounts_pre_filteredCounts) >= 10]
+
+# fpkm(dds_prefiltered)
+# Transform counts for data visualization, add to tables to export
+rld_filtered <- rlog(dds_prefiltered, blind=TRUE)
+vst_filtered <- vst(dds_prefiltered, blind=TRUE)
+rld_filtered_mat <- assay(rld_filtered)
+vst_filtered_mat <- assay(vst_filtered)
+fpkm_filtered <- fpkm(dds_prefiltered)
+
+
+vst_filteredCounts_long <- vst_filtered_mat %>% 
+  as.data.frame() %>% rownames_to_column(var = "geneID") %>% 
+  pivot_longer(!geneID, names_to = "samples", values_to = "VST")
+
+rlog_filteredCounts_long <- rld_filtered_mat %>% 
+  as.data.frame() %>% rownames_to_column(var = "geneID") %>% 
+  pivot_longer(!geneID, names_to = "samples", values_to = "Rlog")
+
+fpkm_filteredCounts_long <- fpkm_filtered %>% 
+  as.data.frame() %>% rownames_to_column(var = "geneID") %>% 
+  pivot_longer(!geneID, names_to = "samples", values_to = "FPKM")
+
+
+
+# fwrite(as.data.table(dds_normalizedCounts), "data/dds_normalizedCounts_all_conditions.tsv")
+
+# head(assays(dds)[["mu"]]) # get the mean of the normalized counts
+# assays(dds)
+# other normalizations
+# cts_coding
+# mcols(dds)
+# names(mcols(dds))
+cpm_out <- edgeR::cpm(dds, log = FALSE, prior.count = 2) #prior.count = 2 is added to avoid log(0) error
+rpkm_out <- edgeR::rpkm(dds, gene.length = mcols(dds)$gene.length,normalized.lib.sizes = TRUE, log = FALSE, prior.count = 2) #gene.length = NULL, 
+
+cpm_filteredCounts <- edgeR::cpm(dds_prefiltered, log = FALSE, prior.count = 2) #prior.count = 2 is added to avoid log(0) error
+rpkm_filteredCounts <- edgeR::rpkm(dds_prefiltered, gene.length = mcols(dds_prefiltered)$gene.length, normalized.lib.sizes = TRUE, log = FALSE, prior.count = 2) #gene.length = NULL, 
+
+#convert to long format for easy plotting
+cpm_filteredCounts_long <- cpm_filteredCounts %>% 
+  as.data.frame() %>% rownames_to_column(var = "geneID") %>% 
+  pivot_longer(!geneID, names_to = "samples", values_to = "CPM")
+
+rpkm_filteredCounts_long <- rpkm_filteredCounts %>% 
+  as.data.frame() %>% rownames_to_column(var = "geneID") %>% 
+  pivot_longer(!geneID, names_to = "samples", values_to = "RPKM")
+
+
+# joined_RPKM_CPM_df <- inner_join(cpm_filteredCounts_long, rpkm_filteredCounts_long, by = c("geneID" , "samples")) #%>% left_join(dds_normalizedCounts_long_2SAVE, by = c("geneID" , "samples"))
+
+#merge all normalized counts and transformations for visulazation
+rnaSeqMatrices_list <- list(rlog = rlog_filteredCounts_long, vst = vst_filteredCounts_long,
+cpm = cpm_filteredCounts_long, rpkm=rpkm_filteredCounts_long, fpkm = fpkm_filteredCounts_long)
+# rpkm_out2 <- edgeR::rpkm(dds, normalized.lib.sizes = TRUE, log = FALSE, prior.count = 2) #gene.length = NULL, 
+
+rnaSeqMatrices_long_df <- reduce(rnaSeqMatrices_list, left_join, by = c("geneID" , "samples"))
+
+# map(rnaSeqMatrices, function(x){
+#   reduce(left_join, by = c("geneID" , "samples"))
+# })
+# head(rpkm_out); head(rpkm_out2)
+# ENSMUSG00000000001.4  56.242237 59.322645 55.262150 50.71634920 51.304924
+# ENSMUSG00000000001.4  47.91211228 49.993275 50.27821 43.006207 53.719418
+# ENSMUSG00000000001.4  55.13339537 55.12542128 53.322225 54.92939288 54.562924
+#cpm_out2 <- edgeR::cpm(counts(dds), log = FALSE, prior.count = 2)
+# rowRanges(dds)
+
+dds_normalizedCounts_long_2SAVE <- dt_normalizedCounts_pre_filteredCounts %>% 
+  as.data.frame() %>% rownames_to_column(var = "geneID") %>% 
+  pivot_longer(!geneID, names_to = "samples", values_to = "NormalizedCounts") %>%  
+  left_join(as.data.frame(metadata_rown_df) %>% mutate(samples = str_replace_all(samples, "\\.", "-"))) %>% 
+  left_join(annot %>% dplyr::select(c(`gene.id`,`gene.symbol`, length)), by = c("geneID" = "gene.id")) #%>%
+#mutate(geneID = paste0(`gene.symbol`,"_",geneID))
+
+dds_normalizedCounts_long_2SAVE %>% filter(NormalizedCounts == 0) #%>% nrow() #no zero values
+dds_normalizedCounts_long_2SAVE <- left_join(dds_normalizedCounts_long_2SAVE, rnaSeqMatrices_long_df, by = c("geneID" , "samples")) %>% mutate(geneID = paste0(`gene.symbol`,"_",geneID)) 
+# dds_normalizedCounts_long_2SAVE <- left_join(dds_normalizedCounts_long_2SAVE, joined_RPKM_CPM_df, by = c("geneID" , "samples")) %>% mutate(geneID = paste0(`gene.symbol`,"_",geneID)) 
+
+#double check, no zero values
+dds_normalizedCounts_long_2SAVE %>% summarize(min(NormalizedCounts), max(NormalizedCounts), mean(NormalizedCounts), sd(NormalizedCounts))
+# joined_RPKM_CPM_df
+fwrite(as.data.table(dds_normalizedCounts_long_2SAVE), "data/dds_normalizedCounts_with_annot_all_samples.tsv")
+# fwrite(as.data.table(dds_normalizedCounts_long_2SAVE), "data/dds_normalizedCounts_with_annot_all_samples.tsv")
+
+
+
+################################################################################################
 #plot gene expressions
 #1. all coding genes per sample; sample page
+#first make  a long format of the data for easy ggplots; this is log format
+dds_normalizedCounts_long <- dds_normalizedCounts %>% 
+  as.data.frame() %>% rownames_to_column(var = "geneID") %>% 
+  pivot_longer(!geneID, names_to = "samples", values_to = "NormalizedCounts") %>% 
+      mutate(NormalizedCounts = log(0.1 + NormalizedCounts))
+
+#add sample metadata 
+dds_normalizedCounts_long_metadata <- dds_normalizedCounts_long %>% 
+  left_join(as.data.frame(metadata_rown_df) %>% 
+    mutate(samples = str_replace_all(samples, "\\.", "-"))) 
+#save a copy of the normalized counts with metadata
+data2Save <- dds_normalizedCounts_long_metadata %>% left_join(annot %>% dplyr::select(c(`gene.id`,`gene.symbol`)), by = c("geneID" = "gene.id")) %>%
+mutate(geneID = paste0(`gene.symbol`,"_",geneID))
+# fwrite(as.data.table(data2Save), "data/dds_normalizedCounts_with_annot_all_samples.tsv")
+
+
+#### 
+
+
 #head(dds_normalizedCounts) 
+#filter genes with at least 10 normalized counts
 dds_normalizedCounts_long_min10 <- dds_normalizedCounts %>% as.data.frame() %>% 
   rownames_to_column(var = "geneID") %>% 
     pivot_longer(!geneID, names_to = "samples", values_to = "NormalizedCounts") %>% 
@@ -160,10 +305,7 @@ stats_df <-  dds_normalizedCounts_long_min10 %>%
 stats_df$stats <- str_wrap(stats_df$stats, width = 10)  # Adjust 'width' as needed
 
 
-dds_normalizedCounts_long <- dds_normalizedCounts %>% 
-  as.data.frame() %>% rownames_to_column(var = "geneID") %>% 
-  pivot_longer(!geneID, names_to = "samples", values_to = "NormalizedCounts") %>% 
-      mutate(NormalizedCounts = log(0.1 + NormalizedCounts))
+
 
 dds_normalizedCounts_long |> group_by(samples) |>
       summarize(n=n(), min(NormalizedCounts), med= round(median(NormalizedCounts), 1), mu= round(mean(NormalizedCounts), 1), 
@@ -184,10 +326,7 @@ plot_NormalizedCounts_min10 <- ggplot(dds_normalizedCounts_long_min10, aes(Norma
   theme(axis.text.x = element_text(angle = 45))
 ggsave(plot_NormalizedCounts_min10, file = "figures/freqpoly_NormalizedCounts_min10.pdf") 
 
-#add sample metadata 
-dds_normalizedCounts_long_metadata <- dds_normalizedCounts_long %>% 
-  left_join(as.data.frame(metadata_rown_df) %>% 
-    mutate(samples = str_replace_all(samples, "\\.", "-"))) 
+
 
 #dds_normalizedCounts_long_metadata %>% dplyr::group_by(condition, samples) %>% summarize(n())
 
@@ -217,9 +356,7 @@ data_filtered <- dds_normalizedCounts_long_metadata %>% dplyr::filter(Normalized
 data_filtered <- data_filtered %>% left_join(annot %>% dplyr::select(c(`gene.id`,`gene.symbol`)), by = c("geneID" = "gene.id")) %>%
 mutate(geneID = paste0(`gene.symbol`,"_",geneID))
 
-data2Save <- dds_normalizedCounts_long_metadata %>% left_join(annot %>% dplyr::select(c(`gene.id`,`gene.symbol`)), by = c("geneID" = "gene.id")) %>%
-mutate(geneID = paste0(`gene.symbol`,"_",geneID))
-fwrite(as.data.table(data2Save), "data/dds_normalizedCounts_with_annot_all_samples.tsv")
+
 
 
 
@@ -303,6 +440,7 @@ ggsave(plot_sd_median_per_gene_across_samples, file = paste0("figures/","median_
 
 ################################################################################################
 ##pre - filtering
+# rowSums(counts(dds)) <= 10
 keep <- rowSums(counts(dds)) >= 10 #keep only counts where rowSums is above 10
 dds <- dds[keep,] #filter dds
 # head(counts(dds))
