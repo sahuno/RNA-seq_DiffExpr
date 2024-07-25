@@ -23,6 +23,10 @@ library(cowplot)
 source_dir = "/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/RNA_seq/" 
 #proj_name = "2023_BRCA_PARP_DESeq2" #project name
 
+#BLOG: fullname path to RNA-seq data
+#/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/triplicates_mouse
+
+
 setwd("/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/sandbox/")
 message("workig dir is - ", getwd())
 #create folders in not aleady there
@@ -31,7 +35,7 @@ dir.create(paste0("data/"), recursive = TRUE, showWarnings = TRUE)
 dir.create(paste0("figures/geneWiseNormalizedCounts"), recursive = TRUE, showWarnings = TRUE)
 
 
-blind_transform <- FALSE #should the rlog transformation be blind
+blind_transform <- TRUE #should the rlog transformation be blind
 drop_samples <- NULL #samples to drop from analysis
 ref_variable = "DMSO"
 smallestGroupSize <- 3
@@ -106,7 +110,7 @@ metadata_rown_df <- metadata_df %>% column_to_rownames("samples")
 # cts_coding <- cts_coding %>% dplyr::select(!veh_2) #remove outlier samples `veh_2`
 ##########################
 #function to make dseq object
-make_dseq_obj <- function(ref_col = NULL){
+make_dseq_obj <- function(ref_col = NULL, add_extra_contrasts = FALSE){
 if(any(str_detect(names(metadata_rown_df), "condition"))){
     message("using condition column to assign samples to groups")
 
@@ -125,15 +129,27 @@ message("adding gene annotations to dseq object")
 gene_ids_from_rownames <- data.frame(gene.id = rownames(cts_coding))
 merge_annot <- merge(gene_ids_from_rownames, annot, by="gene.id", all.x = TRUE)
 merge_annot$basepairs <- merge_annot$length #add gene length for fpkm normalization
-
 mcols(dds) <- DataFrame(mcols(dds), merge_annot)
 
 #create contrast and run for all for all contrasts
 #ref_col = "CTRL"
 cond_levels <- levels(dds$condition) #get condition levels
+# expanded_grid[!(expanded_grid$Condition1 == expanded_grid$Condition2),]
+# expanded_grid$sameCond <- expanded_grid$Condition1 == expanded_grid$Condition2
+
+
 #cond_levels <- c(cond_levels, "treat_2")
 cond_case_level <- cond_levels[!grepl(ref_col, cond_levels)] #take non-base levels in conditions
 contrasts_ls <- paste0("condition_", cond_case_level, "_vs_", ref_col)
+
+#add additional contrasts using pairwise comparisons
+if(add_extra_contrasts){
+expanded_grid <- expand.grid(Condition1 = cond_levels, Condition2 = cond_levels)
+sameCond <- (expanded_grid$Condition1 == expanded_grid$Condition2)
+expanded_grid <- expanded_grid[!sameCond,]
+expanded_grid$contrast <- paste0("condition_", expanded_grid$Condition1, "_vs_", expanded_grid$Condition2)
+contrasts_ls <- c(contrasts_ls, expanded_grid$contrast)
+}
 
 out_dseq <- list(constrasts = contrasts_ls, dSeqObj = dds)
 return(out_dseq)
@@ -141,7 +157,7 @@ return(out_dseq)
 }
 
 #create dseq object and extract contrasts
-dseq_func_out <- make_dseq_obj(ref_col = ref_variable)
+dseq_func_out <- make_dseq_obj(ref_col = ref_variable, add_extra_contrasts = TRUE)
 dds <- dseq_func_out[["dSeqObj"]]
 contrasts_ls <- dseq_func_out[["constrasts"]]
 
@@ -437,15 +453,17 @@ ggsave(plot_sd_median_per_gene_across_samples, file = paste0("figures/","median_
 
 
 
-
+################################################################################################
 ################################################################################################
 ##pre - filtering
 # rowSums(counts(dds)) <= 10
-keep <- rowSums(counts(dds)) >= 10 #keep only counts where rowSums is above 10
+keep <- rowSums(counts(dds) >= 10) >= smallestGroupSize
+# keep <- rowSums(counts(dds)) >= 10 #keep only counts where rowSums is above 10
 dds <- dds[keep,] #filter dds
 # head(counts(dds))
 names(assays(dds))
 
+# keep <- rowSums(counts(dds_2_filterCounts) >= 10) >= smallestGroupSize #keep only counts where rowSums is above 10
 
 ################################################################################################
 ############################### Step 2; Run deseq2 analysis
@@ -464,14 +482,11 @@ dds <- DESeq(dds)
 #      )	
 
 # Transform counts for data visualization
-rld <- rlog(dds, 
-	    blind=blind_transform)
+rld <- rlog(dds, blind=blind_transform)
 
 # Plot PCA 
-pltPCA_samples <- plotPCA(rld, 
-	intgroup=c("condition", "samples"))
+pltPCA_samples <- plotPCA(rld, intgroup=c("condition", "samples"))
 ggsave(pltPCA_samples, file = paste0("figures/PCA_by_condition_and_samples.pdf"), width = 12, height = 12)
-
 
 # Extract the rlog matrix from the object and compute pairwise correlation values
 rld_mat <- assay(rld)
@@ -482,11 +497,17 @@ rld_df <- rld_mat %>% as.data.frame() %>% rownames_to_column("gene.id")
 fwrite(rld_df, file=paste0("data/DESeq2_rlog_Transform_Blind",blind_transform,".tsv"), sep="\t")
 
 
-
 # Plot heatmaps
-pltHeatmap_samples <- pheatmap(rld_cor, 
-	 annotation = metadata_rown_df[,c("condition"), scale = "row", drop = FALSE])
+pltHeatmap_samples <- pheatmap(rld_cor, annotation = metadata_rown_df[,c("condition"), drop = FALSE], scale = "row")
 ggsave(pltHeatmap_samples, file = paste0("figures/heatmap_conditions.pdf"), width = 12, height = 12)
+
+
+# Compute the distance matrix of samples
+sampleDists <- as.dist(1 - cor(rld_mat)) #what does, closet to 1 mean? similar samples
+sampleDistMatrix <- as.matrix(sampleDists)
+pheatmap(sampleDistMatrix, clustering_distance_rows = sampleDists, clustering_distance_cols = sampleDists, annotation = metadata_rown_df[,c("condition"), drop = FALSE] ,filename = "figures/sampleDistMatrix.pdf")
+
+
 
 res_rld_mat_df <- rld_mat %>%
   as.data.frame() %>%
@@ -515,8 +536,8 @@ res_rld_mat_df_pivtLonger <- res_rld_mat_df %>% pivot_longer(!c("gene.id"), name
 #####################################################################################################################
 
 DEResults_ls <- list()
-run_multiple_contrasts <- function(contrast_input, dseqObject = dds, shrink = FALSE, padj_val = 0.05, export_transformed_counts = FALSE){
-  nessage("analyzing ", contrast_input)
+run_multiple_contrasts <- function(contrast_input, dseqObject = dds, shrink = FALSE, padj_val = 0.05, export_transformed_counts = FALSE, ntopVarGenes=20){
+  message("analyzing ", contrast_input)
 dir.create(paste0("data/", contrast_input, "/"), recursive = TRUE, showWarnings = TRUE)
 dir.create(paste0("figures/", contrast_input, "/"), recursive = TRUE, showWarnings = TRUE)
 
@@ -525,6 +546,7 @@ str_vec <- gsub("_vs_", "_", contrast_input);
 contrast_as_vect <- unlist(str_split(str_vec, pattern="_"))
 
 #print(contrast_as_vect)
+##################################################################
 #export Transform counts for data visualization
 message("using constrast")
 if(export_transformed_counts){
@@ -533,18 +555,59 @@ colDat <- colData(dseqObject_copy) %>% as.data.frame()
 idx_samples <- colDat %>% dplyr::filter(condition %in% contrast_as_vect) %>% rownames_to_column("samples.id") %>% pull("samples.id")
 dds_copy_subset <- dseqObject_copy[,idx_samples]
 dds_copy_subset$condition <- droplevels(dds_copy_subset$condition)
+
+# names(mcols(dds_copy_subset))
+#drop, genes with no padj
+# dds_copy_subset <- dds_copy_subset[!is.na(dds_copy_subset$padj), ]
+
 #relevel with last element in contrast vector
 dds_copy_subset$condition <- relevel(dds_copy_subset$condition, ref = contrast_as_vect[3]) 
-dds_copy_subset <- DESeq(dds_copy_subset)
+dds_copy_subset <- DESeq(dds_copy_subset) #call `DESeq` to reset the analysis with only the needed conditions and sample
 
-rld <- rlog(dds_copy_subset,
-	    blind=TRUE)
-
+# Transform counts for data visualization
+rld <- rlog(dds_copy_subset, blind=TRUE)
 rld_mat <- assay(rld)
 rld_df <- rld_mat %>% as.data.frame() %>% rownames_to_column("gene.id")
 #save a copy of the rlog matrix
 write_tsv(rld_df, file=paste0("data/",contrast_input,"/DESeq2_rlog_Transform_BlindTRUE_",contrast_input,".tsv"))
 }
+
+
+##################################################################
+#heatmaps of gene clustering
+rld <- rlog(dseqObject, blind=FALSE) #use, dseq2 object with all samples/conditions/contrasts, doeen't matter since it's experiment-wide investigation
+topVarGenes <- head(order(rowVars(assay(rld)), decreasing = TRUE), ntopVarGenes) #top variable genes across all samples
+rld_top  <- assay(rld)[topVarGenes, ]
+rld_top  <- rld_top - rowMeans(rld_top)
+anno <- as.data.frame(colData(rld)[, c("samples","condition")])
+row_annotations_df <- annot %>% dplyr::filter(gene.id %in% rownames(rld_top)) %>% dplyr::select(c(gene.id, gene.symbol, chr)) #%>% dplyr::mutate(gene.id = factor(gene.id, levels=rownames(rld_top)), rname = rownames(rld_top)) #order(.$gene.id)
+
+#how to actually order the rows
+row_annotations_df$gene.id <- factor(row_annotations_df$gene.id, levels=rownames(rld_top))
+# %>% rownames_to_column("gene.id") %>% as.data.frame()
+row_annotations_df <- row_annotations_df[order(row_annotations_df$gene.id)]
+rownames(row_annotations_df) <- row_annotations_df$gene.id
+
+#careful genes with multiple transcript might caause it to fail
+if(sum(duplicated(row_annotations_df$gene.symbol)) < 1){
+  message("no duplicated gene symbols, assign gene symbols to rownames")
+  rownames(rld_top) <- row_annotations_df$gene.symbol
+  rownames(row_annotations_df) <- row_annotations_df$gene.symbol
+
+# heatmapGeneClustering <- pheatmap(rld_top, annotation_col = anno, annotation_row = row_annotations_df, annotation_names_row = TRUE)
+heatmapGeneClustering <- pheatmap(rld_top, annotation_col = anno)
+# ggsave(heatmapGeneClustering, file = paste0("figures/heatmap_genes_and_samples.pdf"), width = 12, height = 12)
+ggsave(heatmapGeneClustering, file = paste0("figures/",contrast_input,"/heatmap_genes_and_samples.pdf"), width = 12 , height = 9)
+
+}else{
+heatmapGeneClustering <- pheatmap(rld_top, annotation_col = anno, annotation_row = row_annotations_df, annotation_names_row = TRUE)
+# ggsave(heatmapGeneClustering, file = paste0("figures/heatmap_genes_and_samples.pdf"), width = 12, height = 12)
+ggsave(heatmapGeneClustering, file = paste0("figures/",contrast_input,"/heatmap_genes_and_samples.pdf"), width = 12 , height = 9)
+
+}
+
+
+##################################################################
 
 #run DESeq analysis - normalization and filtering
 #use alpha of 0.05
@@ -557,7 +620,7 @@ if(shrink == TRUE){
      type = "apeglm")
 }
 #contrast=contrast_as_vect
-
+#save copy of each contrast results to disk
 saveRDS(results_per_contrast, file=paste0("data/",contrast_input,"/Dseq2ResultsObject_",contrast_input,"_padjust.rds"))
 
 DeSeq2Results_df <- as.data.frame(results_per_contrast) %>% rownames_to_column("gene.id")
@@ -565,6 +628,62 @@ DeSeq2Results_df <- as.data.frame(results_per_contrast) %>% rownames_to_column("
 DeSeq2Results_df_annot <- left_join(DeSeq2Results_df, annot %>% dplyr::select(c(gene.id, gene.symbol, description,  entrez.gene.id)), by="gene.id")
 #save deseq results with annotation as table
 write.table(DeSeq2Results_df_annot, file = paste0("data/",contrast_input,"/Dseq2Results_",contrast_input,".tsv"), sep = "\t", row.names = FALSE, col.names = TRUE)
+
+
+#################################
+###### manual volcano plots
+# DeSeq2Results_df_annot_DEgroups %>% dplyr::group_by(groups) %>% dplyr::summarize(n=n())
+DeSeq2Results_df_annot_DEgroups <- DeSeq2Results_df_annot %>% 
+  dplyr::mutate(groups = case_when(
+    padj < padj_val & log2FoldChange < -1 ~ "sigLFC_Dwn",
+    padj < padj_val & log2FoldChange > 1 ~ "sigLFC_Up",
+    padj > padj_val & log2FoldChange < -1 ~ "nonSigLFC_Dwn",
+    padj > padj_val & log2FoldChange > 1 ~ "nonSigLFC_Up",
+    abs(log2FoldChange) < 1 ~ "NoLFC",
+    TRUE ~ NA))
+    # TRUE ~ "Unclassified"))
+    # groups = paste0(groups, " (", n, ")"),
+    # Counts = paste0(groups, "_", gene.symbol)),
+    # Counts = factor(groups, levels = c("sigDown", "sigUp", "nonSigDown", "nonSigUp", "NoFC", "Unclassified"))
+    # )
+DeSeq2Results_pvals <- DeSeq2Results_df_annot %>% 
+  dplyr::mutate(groups = case_when(
+    pvalue < padj_val & log2FoldChange < -1 ~ "sigLFC_Dwn",
+    pvalue < padj_val & log2FoldChange > 1 ~ "sigLFC_Up",
+    pvalue > padj_val & log2FoldChange < -1 ~ "nonSigLFC_Dwn",
+    pvalue > padj_val & log2FoldChange > 1 ~ "nonSigLFC_Up",
+    abs(log2FoldChange) < 1 ~ "NoLFC",
+    TRUE ~ NA))
+
+# DeSeq2Results_pvals <- DeSeq2Results_df_annot %>% 
+#   dplyr::mutate(groups = case_when(
+#     pvalue < padj_val & log2FoldChange < -1 ~ "sigDown",
+#     pvalue < padj_val & log2FoldChange > 1 ~ "sigUp",
+#     pvalue > padj_val & log2FoldChange < -1 ~ "nonSigDown",
+#     pvalue > padj_val & log2FoldChange > 1 ~ "nonSigUp",
+#     abs(log2FoldChange) < 1 ~ "NoFC",
+#     TRUE ~ NA))
+
+DeSeq2Results_df_annot_DEgroups <- DeSeq2Results_df_annot_DEgroups %>% add_count(groups) %>% mutate(counts = paste0(groups, " (", n, ")")) #%>% head()
+
+stats_df <- DeSeq2Results_df_annot_DEgroups %>% dplyr::group_by(groups) %>% dplyr::summarize(n=n()) %>% ungroup() %>% mutate(groups = paste0(groups, " (", n, ")"), x = 4, y = c(70, 73, 75, 77, 79, 81))
+stats_df_pval <- DeSeq2Results_pvals %>% dplyr::group_by(groups) %>% dplyr::summarize(n=n()) %>% ungroup() %>% mutate(groups = paste0(groups, " (", n, ")"), x = 4, y = c(70, 73, 75, 77, 79, 81))
+
+labels_padj <- paste(stats_df$groups, collapse = "\n")
+labels_pval <- paste(stats_df_pval$groups, collapse = "\n")
+
+plot_volcano <- ggplot(data=DeSeq2Results_df_annot_DEgroups) + 
+geom_point(aes(x=log2FoldChange,y=-log10(padj), color=counts), alpha = 0.3) + geom_vline(xintercept = c(-1, 1), linetype="dotted") + geom_hline(yintercept = -log10(padj_val), linetype="dotted") +
+# geom_text(data=stats_df, aes(x=x, y=y, label=groups), size=3) +
+theme_minimal() + 
+labs(title = paste0("Volcano plot of ", contrast_input)) + theme(axis.text.x = element_text(angle = 45))
+ggsave(plot_volcano, file = paste0("figures/",contrast_input,"/volcano_",contrast_input,"_manual.pdf"), width = 9 , height = 7,dpi = 300)
+
+# DeSeq2Results_df_annot_DEgroups %>% dplyr::group_by(groups) %>% dplyr::summarize(n=n())
+# DeSeq2Results_df_annot_DEgroups %>% dplyr::filter(groups == "Unclassified") %>% head(n=5)
+
+
+
 
 ####do volcano plots
 plt_volc_pval <- EnhancedVolcano(DeSeq2Results_df_annot,
@@ -576,6 +695,9 @@ plt_volc_pval <- EnhancedVolcano(DeSeq2Results_df_annot,
     pointSize = 1, labSize = 5,
     colAlpha = 0.2) +
     theme(plot.subtitle = element_blank())
+
+plt_volc_pval <- plt_volc_pval + annotate("text", x = 5, y = 60, label = labels_pval)
+# plt_volc_pval <- plt_volc_pval + geom_text(data=stats_df, aes(x=x, y=y, label=groups), size=3)
 ggsave(plt_volc_pval, file = paste0("figures/",contrast_input,"/volcano_",contrast_input,"_pvals.pdf"))
 
 #with adjusted p - values
@@ -593,8 +715,20 @@ plt_volc_padjust <- EnhancedVolcano(DeSeq2Results_df_annot_padjustOnly,
     ylab = bquote('-' ~Log[10]~ 'p adjusted'),
     pointSize = 1, 
     colAlpha = 0.2) + theme(plot.subtitle = element_blank())
-    
+
+#add labels to the plot
+plt_volc_padjust <- plt_volc_padjust + annotate("text", x = 5, y = 60, label = labels_padj)
+
 ggsave(plt_volc_padjust, file = paste0("figures/",contrast_input,"/volcano_",contrast_input,"_padjust.pdf"))
+
+pvals_df <- pivot_longer(DeSeq2Results_df_annot, cols = c(pvalue, padj)) #%>% head()
+plt_pval  <- ggplot(data = pvals_df %>% filter(baseMean > 1)) + 
+geom_histogram(aes(value)) + facet_wrap(~name) + 
+theme_minimal() + 
+labs(title = paste0("p & padj values histgram ", contrast_input)) + 
+theme(axis.text.x = element_text(angle = 45))
+ggsave(plt_pval, file = paste0("figures/",contrast_input,"/pNpadjustedValueHistogram_",contrast_input,".pdf"), width = 9 , height = 7,dpi = 300)
+
 
 ####Identifying significant genes
 #Subset to return genes with padj < 0.05
@@ -605,9 +739,10 @@ sig_genes_merged_with_rlog <- sigLRT_genes %>% dplyr::select(c(gene.symbol, gene
 
 heatmap_DE_sig_plot <- ggplot(sig_genes_merged_with_rlog,
                           aes(x=samples, y=gene.symbol, fill=rlog_transformed_counts))+
-                            geom_raster() + scale_fill_viridis() +
+                            geom_raster() + 
+                            scale_fill_viridis() +
                             labs(title = paste0("Heatmap of Differentially Gene Expression ", contrast_input)) +
-                              theme(axis.text.x=element_text(angle=65, hjust=1),
+                            theme(axis.text.x=element_text(angle=65, hjust=1),
                                     legend.position = "top")
 
 ggsave(heatmap_DE_sig_plot, file = paste0("figures/",contrast_input,"/Heatmap_sig_DE",contrast_input,"_padjust",padj_val,".pdf"))
@@ -634,6 +769,7 @@ return(results_per_contrast)
 ############################### Step #; Run DE for each contrast
 ##############################################################################################
 #run for all contrasts
+#contrast_input="condition_AZCT_vs_DMSO"
 DEResults_ls <- lapply(contrasts_ls, function(x) {run_multiple_contrasts(contrast_input=x, dseqObject = dds, shrink = FALSE, export_transformed_counts = TRUE)})
 names(DEResults_ls) <- contrasts_ls
 #summary(DEResults_ls[[1]])
