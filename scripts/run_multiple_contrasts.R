@@ -48,8 +48,56 @@ rld_mat <- assay(rld)
 rld_df <- rld_mat %>% as.data.frame() %>% rownames_to_column("gene.id")
 #save a copy of the rlog matrix
 write_tsv(rld_df, file=paste0("data/",contrast_input,"/DESeq2_rlog_Transform_BlindTRUE_",contrast_input,".tsv"))
+
+
+
+#pairwise clustering
+#prepare data for clustering
+
+dds2 <- DESeq(dds_copy_subset, test = "LRT", reduced = ~1)
+acrossGroups <- results(dds2)
+acrossGroups <- acrossGroups[order(acrossGroups$pvalue), ]
+rld_subsetSample <- rlog(dds2, blind=FALSE)
+rld_subsetSample_mat <- assay(rld_subsetSample)
+
+sigChanges <- rownames(acrossGroups)[acrossGroups$padj < 0.01 & !is.na(acrossGroups$padj)]
+sigMat <- rld_subsetSample_mat[rownames(rld_subsetSample_mat) %in% sigChanges, ]
+pheatmap(sigMat, scale = "row", show_rownames = FALSE, annotation = metadata_rown_df[,c("condition"), drop = FALSE] ,filename = paste0("figures/", contrast_input,"/geneClustering_LRT_full_vrs_reducedModel_",contrast_input,"_only.pdf"))
+k <- pheatmap(sigMat, scale = "row", kmeans_k = 7, annotation = metadata_rown_df[,c("condition"), drop = FALSE] ,filename = paste0("figures/", contrast_input,"/geneClustering_LRT_full_vrs_reducedModel_kmeans7_",contrast_input,"_only.pdf"))
+
+# names(k$kmeans)
+clusterDF <- as.data.frame(factor(k$kmeans$cluster))
+colnames(clusterDF) <- "Cluster"
+# clusterDF[1:10, , drop = FALSE]
+# head(clusterDF)
+
+OrderByCluster <- sigMat[order(clusterDF$Cluster), ]
+
+# Specify colors
+# ann_colors = list(Cluster = brewer.pal(n = length(levels(clusterDF$Cluster)), name = 'Dark2'))
+
+
+pheatmap(OrderByCluster, scale = "row", annotation_row = clusterDF, show_rownames = FALSE,
+    cluster_rows = FALSE,
+    annotation = metadata_rown_df[,c("condition"), drop = FALSE], 
+    # annotation_colors = ann_colors,
+    filename = paste0("figures/", contrast_input,"/geneClustering_LRT_full_vrs_reducedModel_kmeans7_withClutersAnnot_",contrast_input,"_only.pdf"))
+
+# find the optimal clusters
+rowScaledMat <- t(scale(t(sigMat)))
+clusterNum <- NbClust(rowScaledMat, distance = "euclidean", min.nc = 2, max.nc = 12,
+    method = "kmeans", index = "silhouette")
+message("optimal number of clusters: ", clusterNum$Best.nc[1], "; with value index: ", clusterNum$Best.nc[2])
+
+# gsea
+DeSeq2Results_df_condOnly <- as.data.frame(acrossGroups) %>% rownames_to_column("gene.id")
+#merge gene annotations and deseq results
+DeSeq2Results_df_condOnly_annot <- left_join(DeSeq2Results_df_condOnly, annot %>% dplyr::select(c(gene.id, gene.symbol, description,  entrez.gene.id)), by="gene.id") %>% dplyr::filter(!is.na(padj)) 
+#save deseq results with annotation as table
+write.table(DeSeq2Results_df_condOnly_annot, file = paste0("data/",contrast_input,"/Dseq2Results_",contrast_input,"_only.tsv"), sep = "\t", row.names = FALSE, col.names = TRUE)
 }
 
+# "figures/geneClustering_LRT_full_vrs_reducedModel_kmeans7.pdf"
 
 ##################################################################
 #heatmaps of gene clustering
@@ -224,5 +272,6 @@ annot_coldf <- as.data.frame(colData(dseqObject)[,"condition", drop=FALSE])
 pdf(file = paste0("figures/",contrast_input,"/Clustering_sig_DE",contrast_input,"_padjust",padj_val,".pdf"), width=12, height=9)
 pheatmap(rlog_4Clustering_matrix, main = paste0("Clustering of Sig DGE ", contrast_input), scale = "row", annotation_col=annot_coldf)
 dev.off()
-return(results_per_contrast)
+outresults = list(DeSeq2Results_df_condOnly_annot=results_per_contrast, results_per_contrast=results_per_contrast)
+return(outresults)
 }
