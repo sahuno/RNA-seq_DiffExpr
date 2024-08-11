@@ -13,43 +13,58 @@ library(clusterProfiler)
 library(org.Hs.eg.db)
 library(ggnewscale)
 library(cowplot)
+library(RColorBrewer)
+library(NbClust)
+options("width"=200)
 
-
-#/juno/work/greenbaum/projects/TRI_EPIGENETIC/RNASeq_DE_TriEpi
 ########################################################################################
 # set prroject  parameters
 ########################################################################################
-#set wehere count data are;
 source_dir = "/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/RNA_seq/" 
-#proj_name = "2023_BRCA_PARP_DESeq2" #project name
-
 setwd("/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/sandbox/")
-message("workig dir is - ", getwd())
-#create folders in not aleady there
-dir.create(paste0("figures/"), recursive = TRUE, showWarnings = TRUE)
-dir.create(paste0("data/"), recursive = TRUE, showWarnings = TRUE)
-dir.create(paste0("figures/geneWiseNormalizedCounts"), recursive = TRUE, showWarnings = TRUE)
-
-
 blind_transform <- TRUE #should the rlog transformation be blind
 drop_samples <- NULL #samples to drop from analysis
 ref_variable = "DMSO"
 smallestGroupSize <- 3
+
+message("workig dir is - ", getwd())
+dir.create(paste0("figures/"), recursive = TRUE, showWarnings = TRUE)
+dir.create(paste0("data/"), recursive = TRUE, showWarnings = TRUE)
+dir.create(paste0("figures/geneWiseNormalizedCounts"), recursive = TRUE, showWarnings = TRUE)
 ########################################################################################
 ## #read in data, extract coding genes counts 
 ########################################################################################
 #load datasets from rna-seq results folder - sasha
-annot <- fread(paste0(source_dir,'annot.tsv')) 
 counts_annot <- fread(paste0(source_dir,'CT/counts_annot.tsv'))
-cts <- fread(paste0(source_dir,'CT/counts.tsv'))
+# counts_coding_genes_df <- fread(paste0(source_dir,'CT/counts.tsv'))
+countsOnlyDF <- counts_annot[,11 : ncol(counts_annot)]
 
-#get protein coding genes only
-gs.coding_ids <- annot[gene.type=="protein_coding",.(gene.id)]
-cts_coding_df <- cts[gs.coding_ids, on = "gene.id"] %>% as.data.frame()
-cts_coding <- cts_coding_df %>% column_to_rownames(var = "gene.id") # #convert colnames to rowids
-# head(cts_coding)
+### Step 2; get sample metadata
+#note; we assume you already have sample metadata file saved some where
+metadata_df <- read.csv(file = paste0(source_dir,'metadata_triplicates.csv'),sep="," ,header = TRUE)
+metadata_df$condition <- factor(metadata_df$condition)
 
-####isolate repeat elements. we don't want them in differential expression for now
+#create dseq object
+ddsGenesAndTEs <- DESeqDataSetFromMatrix(countData = countsOnlyDF,
+                              colData = metadata_df,
+                              design = ~ condition)
+
+#set the reference group
+message("setting CTRL as reference group")
+ddsGenesAndTEs$condition <- relevel(ddsGenesAndTEs$condition, ref = ref_variable)
+mcols(ddsGenesAndTEs) <- DataFrame(mcols(dObjectGenesAndTEs), counts_annot[,1:11]) #add gene annotations to the dds object
+
+dObjectGenesAndTEs <- DESeq(ddsGenesAndTEs) #this command estimates the size factors and dispersion estimates
+# idxOfRepeats <- which(mcols(dObjectGenesAndTEs)$gene.id %in% counts_coding_genes_df$gene.id) 
+
+# mcols(dObjectGenesAndTEs)[which(mcols(dObjectGenesAndTEs)$gene.id %in% counts_coding_genes_df$gene.id),]
+# dObjectTEs <- dObjectGenesAndTEs[idxOfRepeats,]
+
+# dObjectTEs <- estimateDispersionsGeneEst(dObjectTEs)
+# dispersions(dObjectTEs) <- mcols(dObjectTEs)$dispGeneEst
+# rlogTEs <- rlog(dObjectTEs, blind = blind_transform)
+
+####isolate repeat elements. 
 gs.rep <- annot %>% dplyr::filter(chr == "REP") %>% 
     dplyr::select(c(gene.id, gene.type)) %>% 
       mutate(tp = case_when(str_detect(gene.type,"^(Endogenous|ERV|LTR|Lomg_terminal_repeat|Endogenous_Retrovirus)") ~ "LTR", 
@@ -65,80 +80,38 @@ gs.rep <- annot %>% dplyr::filter(chr == "REP") %>%
                             str_detect(gene.type,"^(scRNA|snRNA|srpRNA|RNA)") ~ "sRNA", 
                             str_detect(gene.type,"^Pseudogene") ~ "Pseudogene", 
                             TRUE ~ "Unclassified"))
-########################################################################################
+
+coding_genes_df <- counts_annot %>% dplyr::filter(!(gene.id %in% gs.rep$gene.id)) #%>% dim()
+
+idxOfRepeats <- which(mcols(dObjectGenesAndTEs)$gene.id %in% gs.rep$gene.id) 
+mcols(dObjectGenesAndTEs)[which(mcols(dObjectGenesAndTEs)$gene.id %in% gs.rep$gene.id),]
+dObjectGenesAndTEs[idxOfRepeats,]
+
+dObjectTEs <- dObjectGenesAndTEs[idxOfRepeats,]
+
+rlogTEs <- rlog(dObjectTEs, blind = blind_transform)
 
 
-########################################################################################
-### Step 2; get sample metadata
-########################################################################################
-#note; we assume you already have sample metadata file saved some where
-metadata_df <- read.csv(file = paste0(source_dir,'metadata_triplicates.csv'),sep="," ,header = TRUE)
-#metadata_df; needs 3 columns; samples-sample names matching rna-seq sample list, condition - treatment/ctrl, new_samples_name - new sample names
-unique(metadata_df$condition_long)
-#rename  samples = 
-#Assign new sample names
-cond_assign_new_sample_names = ncol(metadata_df) > 2 & any(str_detect(names(metadata_df), "new_samples_name"))
+pltPCA_samples <- plotPCA(rlogTEs, intgroup=c("condition", "samples"))
+pltPCA_ConditionsOnly <- plotPCA(rlogTEs, intgroup=c("condition"))
+ggsave(pltPCA_samples, file = paste0("figures/PCA_by_condition_and_samples_Repeats.png"), width = 9, height = 7)
+ggsave(pltPCA_ConditionsOnly, file = paste0("figures/PCA_by_conditionOnly_Repeats.png"), width = 9, height = 7)
 
-if(cond_assign_new_sample_names){
-  #drop samples
-if(!is.null(drop_samples)){
-metadata_df <- metadata_df %>% dplyr::filter(!samples %in% drop_samples)
-cts_coding <- cts_coding %>% dplyr::select(!all_of(drop_samples))
-}
+# Extract the rlog matrix from the object and compute pairwise correlation values
+rld_mat <- assay(rlogTEs)
+rld_cor <- cor(rld_mat)
+rld_df <- rld_mat %>% as.data.frame() %>% rownames_to_column("gene.id")
 
-#assign new sample names
-idx_samples <- match(metadata_df$samples, colnames(cts_coding)) #check if samples match
-names(cts_coding) <- metadata_df[,"new_samples_name"][idx_samples]
-metadata_rown_df <- metadata_df %>% column_to_rownames("new_samples_name")
-}else{
-#drop samples
-# if(!is.null(drop_samples)){
-# metadata_df <- metadata_df %>% dplyr::filter(!samples %in% drop_samples)
-# }
-metadata_rown_df <- metadata_df %>% column_to_rownames("samples")
-}
+#save a copy of the rlog matrix
+# fwrite(rld_df, file=paste0("data/DESeq2_rlog_Transform_Blind",blind_transform,".tsv"), sep="\t")
 
 
+# Plot heatmaps
+pltHeatmap_samples <- pheatmap(rld_cor, annotation = metadata_rown_df[,c("condition"), drop = FALSE], scale = "row")
+ggsave(pltHeatmap_samples, file = paste0("figures/heatmap_conditions_Repeats.png"), width = 12, height = 12)
 
-##exclude samples from dseq analysis
-# cts_coding <- cts_coding %>% dplyr::select(!veh_2) #remove outlier samples `veh_2`
-##########################
-#function to make dseq object
-make_dseq_obj <- function(ref_col = NULL){
-if(any(str_detect(names(metadata_rown_df), "condition"))){
-    message("using condition column to assign samples to groups")
 
-metadata_rown_df$condition <- factor(metadata_rown_df$condition)
-
-dds <- DESeqDataSetFromMatrix(countData = cts_coding,
-                              colData = metadata_rown_df,
-                              design = ~ condition)
-                              
-#reset levels
-message("setting CTRL as reference group")
-dds$condition <- relevel(dds$condition, ref = ref_col)
-
-#add gene annotations to summarize gene expression
-message("adding gene annotations to dseq object")
-gene_ids_from_rownames <- data.frame(gene.id = rownames(cts_coding))
-merge_annot <- merge(gene_ids_from_rownames, annot, by="gene.id", all.x = TRUE)
-merge_annot$basepairs <- merge_annot$length #add gene length for fpkm normalization
-
-mcols(dds) <- DataFrame(mcols(dds), merge_annot)
-
-#create contrast and run for all for all contrasts
-#ref_col = "CTRL"
-cond_levels <- levels(dds$condition) #get condition levels
-#cond_levels <- c(cond_levels, "treat_2")
-cond_case_level <- cond_levels[!grepl(ref_col, cond_levels)] #take non-base levels in conditions
-contrasts_ls <- paste0("condition_", cond_case_level, "_vs_", ref_col)
-
-out_dseq <- list(constrasts = contrasts_ls, dSeqObj = dds)
-return(out_dseq)
-}
-}
-
-#create dseq object and extract contrasts
-dseq_func_out <- make_dseq_obj(ref_col = ref_variable)
-dds <- dseq_func_out[["dSeqObj"]]
-contrasts_ls <- dseq_func_out[["constrasts"]]
+# Compute the distance matrix of samples
+sampleDists <- as.dist(1 - cor(rld_mat)) #what does, closet to 1 mean? similar samples
+sampleDistMatrix <- as.matrix(sampleDists)
+pheatmap(sampleDistMatrix, clustering_distance_rows = sampleDists, clustering_distance_cols = sampleDists, annotation = metadata_rown_df[,c("condition"), drop = FALSE] ,filename = "figures/sampleDistMatrix.pdf")
