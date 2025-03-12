@@ -10,8 +10,24 @@ library(dplyr)
 library(NbClust)
 library(GSVA)
 
+
+library(openxlsx)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+require(DOSE)
+library(msigdbr)
 # library(devtools)
 # install_github("ropensci/magick")
+
+##settings for mouse genome
+# specie_type = "Homo sapiens";
+specie_type = "Mus musculus"
+category_tag = "C2"
+fractEnriched=0.5; do_gse_GO = TRUE
+nCategory_2show = 10; nShowBar=100
+ggwidth = 13; ggheight = 11
+fractEnriched=0.5
+
 
 results_dir <- "/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/sandbox/data/"
 files_deseq_results1 <- list.files(results_dir, recursive = TRUE, full.names = TRUE, pattern = "Dseq2Results_") 
@@ -87,7 +103,10 @@ dev.off()
 
 
 sigLFC_all <- lapply(map_deseq_results, function(x){x[!is.na(padj)][padj<0.05 & abs(log2FoldChange) > 1, ]})
-sigLFC_all[[1]]
+
+#sanity checks
+# sigLFC_all[[1]]$entrez.gene.id
+
 sigLFC_all_genes_only_dt <- lapply(sigLFC_all, function(x){x[,c("gene.id","log2FoldChange")]})
 names(sigLFC_all_genes_only_dt) <- names_files
 sigLFC_all_genes_only_wide_df <- rbindlist(sigLFC_all_genes_only_dt, fill=T, idcol = "condition") %>% 
@@ -95,11 +114,11 @@ sigLFC_all_genes_only_wide_df <- rbindlist(sigLFC_all_genes_only_dt, fill=T, idc
   as.data.frame() %>% 
   column_to_rownames("gene.id") 
 
-#dmso is ref so remove cases when used as alt
+#dmso is ref so remove cases where it was used as alt
 sigLFC_all_genes_only_wide_df <- sigLFC_all_genes_only_wide_df %>% select(!starts_with("DMSO_vs")) #%>% head()
 
 
-
+#remove NA to make it easy for plotting 
 sigLFC_all_genes_only_wide_df_matrix <- data.matrix(sigLFC_all_genes_only_wide_df)
 sigLFC_all_genes_only_wide_df_matrix[is.na(sigLFC_all_genes_only_wide_df_matrix)] = 0
 
@@ -110,6 +129,7 @@ matrixMonoCombo_DMSO_ref_cleaned <- matrixMonoCombo_DMSO_ref[rowSums(matrixMonoC
 
 constrasts_df <- data.frame(contrast = names(sigLFC_all_genes_only_wide_df))
 DrugsAnnot <- constrasts_df %>% dplyr::filter(contrast %in% list_drugs_vs_dmso)%>% mutate(Combinations = case_when(str_detect(contrast, "-") ~ "combo",TRUE ~ "mono"), BroadTargets = case_when(str_detect(contrast, "QSTAT_vs|SETDB1i_vs") ~ "Chromatin", str_detect(contrast, "-CKi_vs_") ~ "Chromatin+MEK" ,str_detect(contrast, "AZA_") ~ "DNAme", str_detect(contrast, "CKi_vs_DMSO") ~ "MEK", TRUE ~ NA), Action = case_when(str_detect(contrast, "QSTAT_vs") ~ "HDACi", str_detect(contrast, "SETDB1i_vs") ~ "H3K9mei" ,str_detect(contrast, "QSTAT-CKi_vs_DMSO") ~ "HDACi+MEKi", str_detect(contrast, "SETDB1i-CKi_vs_DMSO") ~ "H3K9mei+MEKi",str_detect(contrast, "AZA_") ~ "DNMTi", str_detect(contrast, "CKi_vs_DMSO") ~ "MEKi", TRUE ~ NA))
+DrugsAnnot <- DrugsAnnot %>% mutate(MEKi = case_when(str_detect(Action, "MEKi") ~ "Yes", TRUE ~ "No"))
 # )
 rownames(DrugsAnnot) <- DrugsAnnot$contrast
 colnames(matrixMonoCombo_DMSO_ref_cleaned)
@@ -120,35 +140,138 @@ pheatmap(sigLFC_all_genes_only_wide_df_matrix, main = paste0("abs(LFC) > 1 & pad
 dev.off()
 
 # p(file = paste0("clustering_sig_coding_DE_NA_set_to_0_mono_combination_therapy_DMSO_ref.pdf")) #, width=12, height=9
-pheatmap::pheatmap(matrixMonoCombo_DMSO_ref_cleaned,annotation = DrugsAnnot[,c("Combinations", "Action")], main = paste0("abs(LFC) > 1 & padj < 0.05; consensus coding genes[NA=0]"), scale = "row", annotation_names_row=FALSE, show_rownames = F, colorRampPalette(c("#5D3A9B", "white", "#E66100"))(100), filename = paste0("clustering_sig_coding_DE_NA_set_to_0_mono_combination_therapy_DMSO_ref.pdf"))
+pheatmap::pheatmap(matrixMonoCombo_DMSO_ref_cleaned,annotation = DrugsAnnot[,c("Combinations", "Action", "BroadTargets", "MEKi")], main = paste0("abs(LFC) > 1 & padj < 0.05; consensus coding genes[NA=0]"), scale = "row", annotation_names_row=FALSE, show_rownames = F, colorRampPalette(c("#5D3A9B", "white", "#E66100"))(100), filename = paste0("clustering_sig_coding_DE_NA_set_to_0_mono_combination_therapy_DMSO_ref.pdf"))
 # dev.off()
 
 
 # png(file = paste0("Kmeans_clustering_sig_coding_DE_NA_set_to_0_mono_combination_therapy_DMSO_ref.png")) #, width=12, height=9
-k <- pheatmap::pheatmap(matrixMonoCombo_DMSO_ref_cleaned, kmeans_k = 3, annotation = DrugsAnnot[,c("Combinations", "Action")], colorRampPalette(c("#5D3A9B", "white", "#E66100"))(100),main = paste0("abs(LFC) > 1 & padj < 0.05; consensus coding genes[NA=0]"), scale = "row", annotation_names_row=FALSE, show_rownames = F, filename = paste0("Kmeans_clustering_sig_coding_DE_NA_set_to_0_mono_combination_therapy_DMSO_ref.png"))
+k <- pheatmap::pheatmap(matrixMonoCombo_DMSO_ref_cleaned, kmeans_k = 3, annotation = DrugsAnnot[,c("Combinations", "Action", "BroadTargets", "MEKi")], colorRampPalette(c("#5D3A9B", "white", "#E66100"))(100),main = paste0("abs(LFC) > 1 & padj < 0.05; consensus coding genes[NA=0]"), scale = "row", annotation_names_row=FALSE, show_rownames = F, filename = paste0("Kmeans_clustering_sig_coding_DE_NA_set_to_0_mono_combination_therapy_DMSO_ref.png"))
 
 
 # names(k$kmeans)
 clusterDF <- as.data.frame(factor(k$kmeans$cluster))
 colnames(clusterDF) <- "Cluster"
 OrderByCluster <- matrixMonoCombo_DMSO_ref_cleaned[order(clusterDF$Cluster), ]
-pheatmap::pheatmap(OrderByCluster, annotation = DrugsAnnot[,c("Combinations", "Action")], scale = "row", annotation_row = clusterDF, show_rownames = FALSE,
+pheatmap::pheatmap(OrderByCluster, annotation = DrugsAnnot[,c("Combinations", "Action", "BroadTargets", "MEKi")], scale = "row", annotation_row = clusterDF, show_rownames = FALSE,
 colorRampPalette(c("#5D3A9B", "white", "#E66100"))(100),
     cluster_rows = FALSE, filename = paste0("orderedKmeans_clustering_sig_coding_DE_NA_set_to_0_mono_combination_therapy_DMSO_ref.png"))
 
 
 matrixMonoCombo_DMSO_ref_cleaned_scaled <- t(scale(t(matrixMonoCombo_DMSO_ref_cleaned)))
-clusterNum <- NbClust(matrixMonoCombo_DMSO_ref_cleaned_scaled, distance = "euclidean", min.nc = 2, max.nc = 12,method = "kmeans", index = "silhouette")
+clusterNum <- NbClust(matrixMonoCombo_DMSO_ref_cleaned_scaled, distance = "euclidean", min.nc = 2, max.nc = 12, method = "kmeans", index = "silhouette")
 message("optimal number of clusters: ", clusterNum$Best.nc[1], "; with value index: ", clusterNum$Best.nc[2])
 
 clusterDF$`gene.id`` <- rownames(clusterDF)
 write.table(clusterDF, file = "orderedKmeans_clustering_sig_coding_DE_NA_set_to_0_mono_combination_therapy_DMSO_ref.tsv", sep="\t", row.names = FALSE, col.names = TRUE)
 
+#merge nbclusters with metadata
+# clusterNum$Best.partition[1:10]
+orderedCluster <- sort(clusterNum$Best.partition)
+matrixMonoCombo_DMSO_ref_cleaned_scaled_mergedNBClust <- matrixMonoCombo_DMSO_ref_cleaned_scaled[match(names(orderedCluster), rownames(matrixMonoCombo_DMSO_ref_cleaned_scaled)), ]
+
+pheatmap::pheatmap(matrixMonoCombo_DMSO_ref_cleaned_scaled_mergedNBClust, scale = "row", annotation_row = clusterDF, show_rownames = FALSE,
+    cluster_rows = FALSE,
+    annotation = DrugsAnnot[,c("Combinations", "Action", "BroadTargets", "MEKi")], 
+    filename = paste0("kmeans_withOptimumClustering_sig_coding_DE_NA_set_to_0_mono_combination_therapy_DMSO_ref.pdf"))
+
+# heatmapA <- DrugsAnnot[,c("Combinations", "Action", "BroadTargets", "MEKi")]
+# column_ha = HeatmapAnnotation(foo1 = runif(10), bar1 = anno_barplot(runif(10)))
+
+# pdf(paste0("kmeans_withOptimumClustering_sig_coding_DE_NA_set_to_0_mono_combination_therapy_DMSO_ref_heatmap_v2.pdf"))
+# ComplexHeatmap::Heatmap(matrixMonoCombo_DMSO_ref_cleaned_scaled_mergedNBClust, name = "mat",
+# # right_annotation = DrugsAnnot[,c("Combinations", "Action", "BroadTargets", "MEKi")] , 
+# cluster_rows = FALSE, cluster_columns = TRUE, use_raster = TRUE, show_row_names = FALSE, 
+# show_column_names = TRUE, col = colorRampPalette(c("#5D3A9B", "white", "#E66100"))(100))
+# dev.off()
+
+optim_orderedClusterDF <- data.frame(clusterid=factor(orderedCluster))
+
+optim_orderedClusterDF$`gene.id` <- names(orderedCluster)
+write.table(optim_orderedClusterDF, file = "Optim_orderedKmeans_clustering_sig_coding_DE_NA_set_to_0_mono_combination_therapy_DMSO_ref.tsv", sep="\t", row.names = FALSE, col.names = TRUE)
 
 
 # k <- pheatmap(sigMat, scale = "row", kmeans_k = 7, annotation = metadata_rown_df[,c("condition"), drop = FALSE] ,filename = paste0("figures/", contrast_input,"/geneClustering_LRT_full_vrs_reducedModel_kmeans7_",contrast_input,"_only.pdf"))
-
+splitCluster <- split(optim_orderedClusterDF, optim_orderedClusterDF$clusterid)
+splitCluster[[1]]
 # #subset on combination therapies
 # pdf(file = paste0("clustering_sig_DE_NA_set_to_0_mono_combination_therapy.pdf"), width=12, height=9)
 # pheatmap(sigLFC_all_genes_only_wide_df_matrix, main = paste0("abs(LFC) > & padj < 0.05 [coding genes]"), scale = "row", annotation_names_row=FALSE, show_rownames = F)
 # dev.off()
+
+
+
+
+
+
+
+
+
+
+
+################################################################################################################
+###################################################################################################################
+####### gene set enrichment analysis ###### 
+################################################################################################################
+#######################
+# GSEA GO; to identify the clusters of genes that are enriched in the gene sets
+splitCluster[[1]]
+# data(geneList, package="DOSE")
+# gene <- names(geneList)[abs(geneList) > 2]
+
+
+
+#i need global geneSet
+uniqueGlobalGeneSet <- unique(map_deseq_results[[1]]$entrez.gene.id)
+uniqueGlobalGeneSet2 <- uniqueGlobalGeneSet[!is.na(uniqueGlobalGeneSet)]
+
+## use clusters as Background gene set 
+Background_clusters <- map_deseq_results[[1]][!is.na(match(map_deseq_results[[1]]$gene.id, optim_orderedClusterDF$`gene.id`)),]
+Background_clusters_final <- Background_clusters[!is.na(Background_clusters$entrez.gene.id)]
+
+AnnotClusters <- function(dataIn){
+  # sigLFC_all[[1]]$entrez.gene.id
+Keys_sample1 <- map_deseq_results[[1]][!is.na(match(map_deseq_results[[1]]$gene.id, dataIn$`gene.id`)),]
+Keys_sample2 <- Keys_sample1[!is.na(Keys_sample1$entrez.gene.id)]
+
+# optim_orderedClusterDF$`gene.id`
+uniqueEntrezIDs <- unique(Keys_sample2$entrez.gene.id)
+if(do_gse_GO){
+if(specie_type == "Homo sapiens"){
+    ego <- enrichGO(gene      = uniqueEntrezIDs,
+                universe      = Background_clusters_final,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                OrgDb = "org.Hs.eg.db", 
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05,readable= TRUE)    
+
+}else if(specie_type == "Mus musculus"){
+  ego <- enrichGO(gene        = uniqueEntrezIDs,
+                universe      = Background_clusters_final,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                OrgDb = "org.Mm.eg.db", 
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05,readable= TRUE)
+}
+return(ego)
+}
+}
+
+#run annotation of clusters
+# AnnotClusters(dataIn=splitCluster[[1]])
+AnnotattedClusters <- lapply(splitCluster, AnnotClusters)
+AnnotattedClusters_DT_list <- lapply(AnnotattedClusters,function(x){as.data.table(x)} )
+# head(ego, 20) %>% arrange(qvalue) %>% 
+cbindlist(AnnotattedClusters_DT_list)
+
+AnnotattedClusters_DT <- rbindlist(AnnotattedClusters_DT_list,fill=FALSE, idcol="clusterID")
+AnnotattedClusters_DT[,ID_GO:=paste(ID, Description)]
+AnnotattedClusters_DT[,ID_GO:=str_wrap(ID_GO, width = 10)]
+
+AnnotattedClusters_DT_2plot <- AnnotattedClusters_DT %>% group_by(clusterID) %>% slice_head(n = 10)
+
+GO_bP_plot <-  ggplot(data=AnnotattedClusters_DT_2plot, aes(x = -log10(qvalue), y=ID_GO)) + geom_col() + facet_wrap(~clusterID, scales = "free") + theme_minimal() + theme(axis.text.x=element_text(angle=90)) + labs(title = "GO BP enrichment")
+# %>% write.table(file = "GSEA_GO_enrichedSets.tsv", sep="\t", row.names = FALSE, col.names = TRUE)
+ggsave(GO_bP_plot, filename = "GO_OverRepresentation_BP_enrichedSets.pdf", width = 18, height = 10, units = "in", dpi = 300)
+
