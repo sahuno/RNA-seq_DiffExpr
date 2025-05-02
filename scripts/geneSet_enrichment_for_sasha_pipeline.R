@@ -5,22 +5,52 @@ library(org.Hs.eg.db)
 require(DOSE)
 library(msigdbr)
 
-# specie_type = "Homo sapiens";
-specie_type = "Mus musculus"
-category_tag = "C2"
-fractEnriched=0.5; do_gse_GO = TRUE
-nCategory_2show = 10; nShowBar=100
-ggwidth = 13; ggheight = 11
-fractEnriched=0.5
+# Parse command line options
+library(optparse)
+option_list <- list(
+  make_option(c("-s", "--specie_type"), type="character", default="Mus musculus",
+              help="Species type, e.g., 'Homo sapiens' or 'Mus musculus'"),
+  make_option(c("-c", "--category_tag"), type="character", default="C2",
+              help="Category tag for enrichment analysis"),
+  make_option(c("-f", "--fractEnriched"), type="double", default=0.5,
+              help="Fraction enriched threshold"),
+  make_option(c("-g", "--do_gse_GO"), action="store_true", default=TRUE,
+              help="Whether to perform GSEA GO"),
+  make_option(c("-n", "--nCategory_2show"), type="integer", default=10,
+              help="Number of categories to show"),
+  make_option(c("-b", "--nShowBar"), type="integer", default=100,
+              help="Number of bars to show in plots"),
+  make_option(c("--ggwidth"), type="double", default=13,
+              help="Width of ggplot figures"),
+  make_option(c("--ggheight"), type="double", default=11,
+              help="Height of ggplot figures"),
+  make_option(c("-d", "--de_file"), type="character",
+              default="/data1/greenbab/projects/triplicates_epigenetics_diyva/RNA/DE/DE.xlsx",
+              help="Path to DE Excel file"),
+  make_option(c("-N", "--name_de_res"), type="character", default="triplicates_epigenetics_diyva",
+              help="Name identifier for DE results")
+)
+opt_parser <- OptionParser(option_list=option_list)
+opt <- parse_args(opt_parser)
 
-de_AzaMouse <- "/data1/greenbab/projects/triplicates_epigenetics_diyva/RNA/DE/DE.xlsx"
-name_de_res = "triplicates_epigenetics_diyva"
+# Assign variables from parsed options
+specie_type     <- opt$specie_type
+category_tag    <- opt$category_tag
+fractEnriched   <- opt$fractEnriched
+do_gse_GO       <- opt$do_gse_GO
+nCategory_2show <- opt$nCategory_2show
+nShowBar        <- opt$nShowBar
+ggwidth         <- opt$ggwidth
+ggheight        <- opt$ggheight
+de_AzaMouse     <- opt$de_file
+name_de_res     <- opt$name_de_res
 
-# de_AzaMouse <- "/data1/greenbab/projects/AZA_MDS_PrePost/RNA_analysis/DE/DE.xlsx"
-# name_de_res = "AZA_MDS_PrePost"
-# de_AzaMouse <- "/data1/greenbab/projects/public_Epigenetic_therapy/HCT116_AZA_RNA/DE/DE.xlsx"
-# name_de_res = "HCT116_AZA_RNA"
-# install.packages("openxlsx", dependencies = TRUE)
+# Bold console messages
+if (!requireNamespace("crayon", quietly = TRUE)) {
+  install.packages("crayon")
+}
+library(crayon)
+
 de <- read.xlsx(de_AzaMouse, sheet=2)
 de_sigChanges <- rownames(de)[de$padj < 0.05 & !is.na(de$padj)]
 res_entrez <- dplyr::filter(de, entrez.gene.id != "NA")
@@ -35,7 +65,7 @@ names(foldchanges) <- res_entrez$entrez.gene.id
 ## Sort fold changes in decreasing order
 foldchanges <- sort(foldchanges, decreasing = TRUE)
 
-message("performing GSEA using MSigDb ", category_tag," Specie - ", specie_type)
+message(crayon::bold(paste0("performing GSEA using MSigDb ", category_tag, " Specie - ", specie_type)))
 dir.create(paste0("figures/", name_de_res,"/enrichment_Plots/GSEA_MSigDb_",category_tag,"/"), recursive = TRUE, showWarnings = TRUE)
 dir.create(paste0("data/", name_de_res,"/enrichment_Plots/GSEA_MSigDb_",category_tag,"/"), recursive = TRUE, showWarnings = TRUE)
 

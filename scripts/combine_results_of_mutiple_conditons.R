@@ -9,8 +9,7 @@ library(rlist)
 library(dplyr)
 library(NbClust)
 library(GSVA)
-
-
+library(optparse)
 library(openxlsx)
 library(clusterProfiler)
 library(org.Hs.eg.db)
@@ -19,17 +18,55 @@ library(msigdbr)
 # library(devtools)
 # install_github("ropensci/magick")
 
-##settings for mouse genome
-# specie_type = "Homo sapiens";
-specie_type = "Mus musculus"
-category_tag = "C2"
-fractEnriched=0.5; do_gse_GO = TRUE
-nCategory_2show = 10; nShowBar=100
-ggwidth = 13; ggheight = 11
-fractEnriched=0.5
+## RUN THIS SCRIPT WITH THE FOLLOWING COMMAND
+# Rscript RNA-seq_DiffExpr/scripts/combine_results_of_mutiple_conditons.R \
+#   --specie_type "Mus musculus" \
+#   --category_tag "C2" \
+#   --fractEnriched 0.5 \
+#   --do_gse_GO \
+#   --nCategory_2show 10 \
+#   --nShowBar 100 \
+#   --ggwidth 13 \
+#   --ggheight 11 \
+#   --results_dir "/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/sandbox/data/"
+  
+# Parse command line options
+library(optparse)
+option_list <- list(
+  make_option(c("-s", "--specie_type"), type="character", default="Mus musculus",
+              help="Species type, e.g., 'Homo sapiens' or 'Mus musculus'"),
+  make_option(c("-c", "--category_tag"), type="character", default="C2",
+              help="Category tag for enrichment analysis"),
+  make_option(c("-f", "--fractEnriched"), type="double", default=0.5,
+              help="Fraction enriched threshold"),
+  make_option(c("-g", "--do_gse_GO"), action="store_true", default=TRUE,
+              help="Whether to perform GSEA GO"),
+  make_option(c("-n", "--nCategory_2show"), type="integer", default=10,
+              help="Number of categories to show"),
+  make_option(c("-b", "--nShowBar"), type="integer", default=100,
+              help="Number of bars to show in plots"),
+  make_option(c("--ggwidth"), type="double", default=13,
+              help="Width of ggplot figures"),
+  make_option(c("--ggheight"), type="double", default=11,
+              help="Height of ggplot figures"),
+  make_option(c("-r", "--results_dir"), type="character",
+              default="data/",
+              help="Results directory path")
+)
+opt_parser <- OptionParser(option_list=option_list)
+opt <- parse_args(opt_parser)
 
+# Assign variables from parsed options
+specie_type    <- opt$specie_type
+category_tag   <- opt$category_tag
+fractEnriched  <- opt$fractEnriched
+do_gse_GO      <- opt$do_gse_GO
+nCategory_2show<- opt$nCategory_2show
+nShowBar       <- opt$nShowBar
+ggwidth        <- opt$ggwidth
+ggheight       <- opt$ggheight
+results_dir    <- opt$results_dir
 
-results_dir <- "/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/sandbox/data/"
 files_deseq_results1 <- list.files(results_dir, recursive = TRUE, full.names = TRUE, pattern = "Dseq2Results_") 
 files_deseq_results <- files_deseq_results1[-grep("only_LTR_Test.tsv", files_deseq_results1)]
 
@@ -44,25 +81,6 @@ names(upLFC_all_geneIDs_genes_only_dt) <- names_files
 names(upLFC_all_geneIDs_genes_only_vector) <- names_files
 names(names_files) <- NULL #remove long file paths
 dt_cbind_LFCup <- list.cbind(upLFC_all_geneIDs_genes_only_dt)
-# duplicated(dt_cbind_LFCup)
-
-# sum(duplicated(dt_cbind))
-# table(dt_cbind_LFCup$`SETDB1i_vs_QSTAT-CKi.gene.id`)
-# dt_cbind_LFCup %>% group_by(`SETDB1i_vs_QSTAT-CKi.gene.id`) %>% summarize(n=n())
-
-# dt_cbind
-# duplicated_rows_dplyr <- dt_cbind_LFCup %>%
-#   group_by_all() %>%
-#   dplyr::filter(n() > 1) %>%
-#   ungroup()
-# Reduce(function(d1, d2) cbind(d1, d2), upLFC_all_geneIDs_only)
-
-# list_to_matrix(upLFC_all_geneIDs_only)
-
-
-# map_deseq_results[[1]][,"gene.id" ]
-# map_deseq_results[[1]] %>% dplyr::filter(padj < 0.05 & log2FoldChange > 1)
-# lapply(upLFC_all_geneIDs_genes_only_dt, dim)
 
 names_files[grep("vs_DMSO",names_files)]
 names_files[grep("vs_DMSO",names_files)]
@@ -72,9 +90,6 @@ combinedTherapy <- c("SETDB1i-CKi_vs_SETDB1i" ,"SETDB1i-CKi_vs_CKi","QSTAT-CKi_v
 monTherapy <- c("AZA_vs_DMSO", "CKi_vs_DMSO","QSTAT_vs_DMSO", "QSTAT-CKi_vs_DMSO", "SETDB1i_vs_DMSO", "SETDB1i-CKi_vs_DMSO")
 
 list_drugs_vs_dmso <- names_files[grepl("vs_DMSO",names_files)]
-# list_drugs_vs_dmso <- names(sigLFC_all_genes_only_wide_df)[grepl("vs_DMSO",names(sigLFC_all_genes_only_wide_df))]
-
-
 
 intersections_all_conds <- fromList(upLFC_all_geneIDs_genes_only_vector)
 
@@ -88,7 +103,6 @@ upset_monoCombo <- upset(intersections_all_conds, order.by = "freq", sets = c(mo
 pdf("upset_mono_combination_coding_genes_LFC_above1_padj_005_v2.pdf",width = 18, height = 10)
 print(upset_monoCombo)
 dev.off()
-# ggsave(upset_out, filename = "upset_all_conditions_genes_LFC_above1_padj_0.05.png",width = 10, height = 10)
 
 #easy on the eyes for presentation
 upset_monoCombo_curated <- upset(intersections_all_conds, order.by = "freq", sets = list_drugs_vs_dmso, set_size.show = TRUE)
@@ -100,12 +114,7 @@ dev.off()
 ################################################################################################################
 #clustering of gebes with significant LFC
 ################################################################################################################
-
-
 sigLFC_all <- lapply(map_deseq_results, function(x){x[!is.na(padj)][padj<0.05 & abs(log2FoldChange) > 1, ]})
-
-#sanity checks
-# sigLFC_all[[1]]$entrez.gene.id
 
 sigLFC_all_genes_only_dt <- lapply(sigLFC_all, function(x){x[,c("gene.id","log2FoldChange")]})
 names(sigLFC_all_genes_only_dt) <- names_files
@@ -199,15 +208,6 @@ splitCluster[[1]]
 # dev.off()
 
 
-
-
-
-
-
-
-
-
-
 ################################################################################################################
 ###################################################################################################################
 ####### gene set enrichment analysis ###### 
@@ -215,10 +215,6 @@ splitCluster[[1]]
 #######################
 # GSEA GO; to identify the clusters of genes that are enriched in the gene sets
 splitCluster[[1]]
-# data(geneList, package="DOSE")
-# gene <- names(geneList)[abs(geneList) > 2]
-
-
 
 #i need global geneSet
 uniqueGlobalGeneSet <- unique(map_deseq_results[[1]]$entrez.gene.id)

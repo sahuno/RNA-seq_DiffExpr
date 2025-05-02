@@ -18,45 +18,79 @@ library(NbClust)
 library(ggrepel)
 options("width"=200)
 
+
+
+# Rscript scripts/coding_genes.r \
+#   --source_dir "/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/RNA_seq/" \
+#   --workflow_dir "/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/" \
+#   --sandbox_dir "/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/sandbox/" \
+#   --blind_transform TRUE \
+#   --drop_samples "R.S.2,R.C.3" \
+#   --ref_variable "DMSO" \
+#   --min_read_counts 50 \
+#   --smallest_group_size 3 \
+#   --qc_metrics "/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/triplicates_mouse/qc.tsv"
+
+
+
+# Parse command-line options
+library(optparse)
+option_list <- list(
+  make_option(c("-s", "--source_dir"), type="character",
+              default="/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/RNA_seq/",
+              help="Path to RNA-seq count data directory"),
+  make_option(c("-w", "--workflow_dir"), type="character",
+              default="/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/",
+              help="Path to workflow directory"),
+  make_option(c("--sandbox_dir"), type="character",
+              default="/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/sandbox/",
+              help="Working sandbox directory"),
+  make_option(c("--blind_transform"), type="logical", default=TRUE,
+              help="Perform blind rlog transformation"),
+  make_option(c("--drop_samples"), type="character", default="R.S.2,R.C.3",
+              help="Comma-separated samples to drop"),
+  make_option(c("--ref_variable"), type="character", default="DMSO",
+              help="Reference condition variable"),
+  make_option(c("--min_read_counts"), type="integer", default=50,
+              help="Minimum read count threshold"),
+  make_option(c("--smallest_group_size"), type="integer", default=3,
+              help="Smallest group size for filtering"),
+  make_option(c("--qc_metrics"), type="character",
+              default="/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/triplicates_mouse/qc.tsv",
+              help="Path to QC metrics TSV file")
+)
+opt_parser <- OptionParser(option_list = option_list)
+opt <- parse_args(opt_parser)
+
+# Assign variables from options
+source_dir <- opt$source_dir
+workflow_dir <- opt$workflow_dir
+setwd(opt$sandbox_dir)
+message("working dir is - ", getwd())
+# Create output directories
+dir.create("figures", recursive=TRUE, showWarnings=TRUE)
+dir.create("data", recursive=TRUE, showWarnings=TRUE)
+dir.create("figures/geneWiseNormalizedCounts", recursive=TRUE, showWarnings=TRUE)
+
+blind_transform <- opt$blind_transform
+drop_samples <- if (opt$drop_samples != "") strsplit(opt$drop_samples, ",")[[1]] else NULL
+ref_variable <- opt$ref_variable
+MIN_ReadsCounts <- opt$min_read_counts
+smallestGroupSize <- opt$smallest_group_size
+
+# Load helper functions
+source(file.path(workflow_dir, "scripts", "helper_functions.R"))
+
+# Read data files
+annot <- fread(file.path(source_dir, "annot.tsv"))
+counts_annot <- fread(file.path(source_dir, "CT", "counts_annot.tsv"))
+cts <- fread(file.path(source_dir, "CT", "counts.tsv"))
+qc_metrics <- fread(opt$qc_metrics)
+
 #/juno/work/greenbaum/projects/TRI_EPIGENETIC/RNASeq_DE_TriEpi
 ########################################################################################
 # set prroject  parameters
 ########################################################################################
-#set wehere count data are;
-source_dir <- "/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/RNA_seq/" 
-workflow_dir <- "/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/"
-#proj_name = "2023_BRCA_PARP_DESeq2" #project name
-
-#BLOG: fullname path to RNA-seq data
-#/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/triplicates_mouse
-
-
-setwd("/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/sandbox/")
-message("workig dir is - ", getwd())
-#create folders in not aleady there
-dir.create(paste0("figures/"), recursive = TRUE, showWarnings = TRUE)
-dir.create(paste0("data/"), recursive = TRUE, showWarnings = TRUE)
-dir.create(paste0("figures/geneWiseNormalizedCounts"), recursive = TRUE, showWarnings = TRUE)
-
-
-blind_transform <- TRUE #should the rlog transformation be blind
-# drop_samples <- "R.S.2" #samples to drop from analysis
-drop_samples <- c("R.S.2", "R.C.3") #samples to drop from analysis
-# drop_samples <- NULL #samples to drop from analysis
-ref_variable = "DMSO"
-MIN_ReadsCounts = 50
-smallestGroupSize <- 3
-
-source(paste0(workflow_dir,"scripts/helper_functions.R"))
-########################################################################################
-## #read in data, extract coding genes counts 
-########################################################################################
-#load datasets from rna-seq results folder - sasha
-annot <- fread(paste0(source_dir,'annot.tsv')) 
-counts_annot <- fread(paste0(source_dir,'CT/counts_annot.tsv'))
-cts <- fread(paste0(source_dir,'CT/counts.tsv'))
-#doing this cos the file is not in the `source_dir` directory
-qc_metrics <- fread("/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/triplicates_mouse/qc.tsv")
 
 #get protein coding genes only
 gs.coding_ids <- annot[gene.type=="protein_coding",.(gene.id)]
