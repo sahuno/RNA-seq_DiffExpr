@@ -20,10 +20,9 @@ options("width"=200)
 
 
 
-# Rscript scripts/coding_genes.r \
-#   --source_dir "/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/RNA_seq/" \
+# Rscript /data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/scripts/coding_genes.r \
+#   --source_dir "/data1/greenbab/projects/triplicates_epigenetics_diyva/RNA/" \
 #   --workflow_dir "/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/" \
-#   --sandbox_dir "/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/sandbox/" \
 #   --blind_transform TRUE \
 #   --drop_samples "R.S.2,R.C.3" \
 #   --ref_variable "DMSO" \
@@ -32,19 +31,24 @@ options("width"=200)
 #   --qc_metrics "/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/triplicates_mouse/qc.tsv"
 
 
+# /data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/RNA_seq/
+
+
+#   --sandbox_dir "/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/sandbox/" \
+
 
 # Parse command-line options
 library(optparse)
 option_list <- list(
   make_option(c("-s", "--source_dir"), type="character",
               default="/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/RNA_seq/",
-              help="Path to RNA-seq count data directory"),
+              help="parent directory to RNA-seq count data"),
   make_option(c("-w", "--workflow_dir"), type="character",
               default="/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/",
               help="Path to workflow directory"),
-  make_option(c("--sandbox_dir"), type="character",
-              default="/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/sandbox/",
-              help="Working sandbox directory"),
+  # make_option(c("--sandbox_dir"), type="character",
+  #             default="/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/sandbox/",
+              # help="Working sandbox directory"),
   make_option(c("--blind_transform"), type="logical", default=TRUE,
               help="Perform blind rlog transformation"),
   make_option(c("--drop_samples"), type="character", default="R.S.2,R.C.3",
@@ -57,7 +61,10 @@ option_list <- list(
               help="Smallest group size for filtering"),
   make_option(c("--qc_metrics"), type="character",
               default="/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/triplicates_mouse/qc.tsv",
-              help="Path to QC metrics TSV file")
+              help="Path to QC metrics TSV file"),
+  make_option(c("--metadata_File"), type="character",
+              default="/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/RNA_seq/metadata_triplicates_recoded.csv",
+              help="Path metadata file")
 )
 opt_parser <- OptionParser(option_list = option_list)
 opt <- parse_args(opt_parser)
@@ -65,8 +72,9 @@ opt <- parse_args(opt_parser)
 # Assign variables from options
 source_dir <- opt$source_dir
 workflow_dir <- opt$workflow_dir
-setwd(opt$sandbox_dir)
-message("working dir is - ", getwd())
+message("setting working dir is - ", getwd())
+setwd(getwd())
+
 # Create output directories
 dir.create("figures", recursive=TRUE, showWarnings=TRUE)
 dir.create("data", recursive=TRUE, showWarnings=TRUE)
@@ -123,7 +131,7 @@ gs.rep <- annot %>% dplyr::filter(chr == "REP") %>%
 ### Step 2; get sample metadata
 ########################################################################################
 #note; we assume you already have sample metadata file saved some where
-metadata_df <- read.csv(file = paste0(source_dir,'metadata_triplicates_recoded.csv'),sep="," ,header = TRUE)
+metadata_df <- read.csv(file = paste0(opt$metadata_File),sep="," ,header = TRUE)
 #metadata_df; needs 3 columns; samples-sample names matching rna-seq sample list, condition - treatment/ctrl, new_samples_name - new sample names
 unique(metadata_df$condition_long)
 #rename  samples = 
@@ -330,7 +338,7 @@ pheatmap(sigMat, scale = "row", annotation_row = clusterDF, show_rownames = FALS
 ############################### Step 3; Run deseq2 analysis for each contrast
 #####################################################################################################################
 DEResults_ls <- list()
-source("../scripts/run_multiple_contrasts.R") #split this script into a function
+source(paste0(opt$workflow_dir,"/scripts/run_multiple_contrasts.R")) #split this script into a function
 ################################################################################################
 ############################### Step #; Run DE for each contrast
 ##############################################################################################

@@ -19,7 +19,7 @@ library(msigdbr)
 # install_github("ropensci/magick")
 
 ## RUN THIS SCRIPT WITH THE FOLLOWING COMMAND
-# Rscript RNA-seq_DiffExpr/scripts/combine_results_of_mutiple_conditons.R \
+# Rscript /data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/scripts/combine_results_of_mutiple_conditons.R \
 #   --specie_type "Mus musculus" \
 #   --category_tag "C2" \
 #   --fractEnriched 0.5 \
@@ -28,7 +28,7 @@ library(msigdbr)
 #   --nShowBar 100 \
 #   --ggwidth 13 \
 #   --ggheight 11 \
-#   --results_dir "/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/sandbox/data/"
+#   --results_dir "/data1/greenbab/projects/triplicates_epigenetics_diyva/RNA/rerun_RNASeq_11032025/codingGenesDExpr/data"
   
 # Parse command line options
 library(optparse)
@@ -214,7 +214,7 @@ splitCluster[[1]]
 ################################################################################################################
 #######################
 # GSEA GO; to identify the clusters of genes that are enriched in the gene sets
-splitCluster[[1]]
+# splitCluster[[1]]
 
 #i need global geneSet
 uniqueGlobalGeneSet <- unique(map_deseq_results[[1]]$entrez.gene.id)
