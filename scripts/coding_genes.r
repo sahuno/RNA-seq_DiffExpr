@@ -41,7 +41,7 @@ options("width"=200)
 library(optparse)
 option_list <- list(
   make_option(c("-s", "--source_dir"), type="character",
-              default="/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/RNA_seq/",
+              default="/data1/greenbab/projects/triplicates_epigenetics_diyva/RNA/rerun_RNASeq_11032025/",
               help="parent directory to RNA-seq count data"),
   make_option(c("-w", "--workflow_dir"), type="character",
               default="/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/",
@@ -63,7 +63,7 @@ option_list <- list(
               default="/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/triplicates_mouse/qc.tsv",
               help="Path to QC metrics TSV file"),
   make_option(c("--metadata_File"), type="character",
-              default="/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/RNA_seq/metadata_triplicates_recoded.csv",
+              default="/data1/greenbab/projects/triplicates_epigenetics_diyva/configs/metadata_triplicates_recoded_QSTAT_group.csv",
               help="Path metadata file")
 )
 opt_parser <- OptionParser(option_list = option_list)
@@ -87,13 +87,16 @@ MIN_ReadsCounts <- opt$min_read_counts
 smallestGroupSize <- opt$smallest_group_size
 
 # Load helper functions
-source(file.path(workflow_dir, "scripts", "helper_functions.R"))
+# source(file.path(workflow_dir, "scripts", "helper_functions.R"))
 
 # Read data files
 annot <- fread(file.path(source_dir, "annot.tsv"))
 counts_annot <- fread(file.path(source_dir, "CT", "counts_annot.tsv"))
 cts <- fread(file.path(source_dir, "CT", "counts.tsv"))
 qc_metrics <- fread(opt$qc_metrics)
+
+### source helper functions
+source(paste0(opt$workflow_dir,"/scripts/de_helper_functions.R")) #split this script into a function
 
 #/juno/work/greenbaum/projects/TRI_EPIGENETIC/RNASeq_DE_TriEpi
 ########################################################################################
@@ -133,7 +136,10 @@ gs.rep <- annot %>% dplyr::filter(chr == "REP") %>%
 #note; we assume you already have sample metadata file saved some where
 metadata_df <- read.csv(file = paste0(opt$metadata_File),sep="," ,header = TRUE)
 #metadata_df; needs 3 columns; samples-sample names matching rna-seq sample list, condition - treatment/ctrl, new_samples_name - new sample names
-unique(metadata_df$condition_long)
+
+# TODO: check if metadata_df has the required columns
+message(unique(metadata_df$condition_long))
+
 #rename  samples = 
 #Assign new sample names
 cond_assign_new_sample_names = ncol(metadata_df) > 2 & any(str_detect(names(metadata_df), "new_samples_name"))
@@ -149,7 +155,7 @@ cts_coding <- cts_coding %>% dplyr::select(!all_of(drop_samples))
 idx_samples <- match(metadata_df$samples, colnames(cts_coding)) #check if samples match
 names(cts_coding) <- metadata_df[,"new_samples_name"][idx_samples]
 metadata_rown_df <- metadata_df %>% column_to_rownames("new_samples_name")
-}else{
+} else{
 #drop samples
 # if(!is.null(drop_samples)){
 # metadata_df <- metadata_df %>% dplyr::filter(!samples %in% drop_samples)
@@ -231,8 +237,8 @@ rld <- rlog(dds, blind=blind_transform)
 # rld_mat <- assay(rld)
 
 # Plot PCA 
-pltPCA_samples <- plotPCA(rld, intgroup=c("condition", "samples"))
-pltPCA_ConditionsOnly <- plotPCA(rld, intgroup=c("condition"))
+pltPCA_samples <- plotPCA(rld, intgroup=c("condition", "samples")) + ggtitle("all samples & conditions")
+pltPCA_ConditionsOnly <- plotPCA(rld, intgroup=c("condition")) + ggtitle("all samples & conditions")
 ggsave(pltPCA_samples, file = paste0("figures/PCA_by_condition_and_samples_",paste0(drop_samples, collapse="_"),"Removed.pdf"), width = 12, height = 12)
 ggsave(pltPCA_ConditionsOnly, file = paste0("figures/PCA_by_conditionOnly_",paste0(drop_samples, collapse="_"),".pdf"), width = 12, height = 12)
 
@@ -246,14 +252,15 @@ fwrite(rld_df, file=paste0("data/DESeq2_rlog_Transform_Blind",blind_transform,".
 
 
 # Plot heatmaps
-pltHeatmap_samples <- pheatmap(rld_cor, annotation = metadata_rown_df[,c("condition"), drop = FALSE], scale = "row")
-ggsave(pltHeatmap_samples, file = paste0("figures/heatmap_conditions_",paste0(drop_samples, collapse="_"),".pdf"), width = 12, height = 12)
+pltHeatmap_samples <- pheatmap(rld_cor, annotation = metadata_rown_df[,c("condition"), drop = FALSE], scale = "row", main = "Heatmap of rlog transformed counts")
+ggsave(pltHeatmap_samples, file = paste0("figures/heatmap_conditions_samples_",paste0(drop_samples, collapse="_"),"_dropped.pdf"), width = 12, height = 12)
 
 
 # Compute the distance matrix of samples
+message("Computing distance matrix of samples")
 sampleDists <- as.dist(1 - cor(rld_mat)) #what does, closet to 1 mean? similar samples
 sampleDistMatrix <- as.matrix(sampleDists)
-pheatmap(sampleDistMatrix, clustering_distance_rows = sampleDists, clustering_distance_cols = sampleDists, annotation = metadata_rown_df[,c("condition"), drop = FALSE] ,filename = paste0("figures/sampleDistMatrix_",paste0(drop_samples, collapse="_"),".pdf"))
+pheatmap(sampleDistMatrix, clustering_distance_rows = sampleDists, clustering_distance_cols = sampleDists, annotation = metadata_rown_df[,c("condition"), drop = FALSE], main = "sample distance of rlog transformed counts",filename = paste0("figures/sampleDistMatrix_samples_",paste0(drop_samples, collapse="_"),"_dropped.pdf"))
 
 
 
@@ -292,8 +299,8 @@ rld_4dds2_mat <- assay(rld_4dds2)
 
 sigChanges <- rownames(acrossGroups)[acrossGroups$padj < 0.01 & !is.na(acrossGroups$padj)]
 sigMat <- rld_4dds2_mat[rownames(rld_4dds2_mat) %in% sigChanges, ]
-pheatmap(sigMat, scale = "row", show_rownames = FALSE, annotation = metadata_rown_df[,c("condition"), drop = FALSE] ,filename = "figures/geneClustering_LRT_full_vrs_reducedModel.pdf")
-k <- pheatmap(sigMat, scale = "row", kmeans_k = 4, annotation = metadata_rown_df[,c("condition"), drop = FALSE] ,filename = "figures/geneClustering_LRT_full_vrs_reducedModel_kmeans4.pdf")
+pheatmap(sigMat, scale = "row", show_rownames = FALSE, annotation = metadata_rown_df[,c("condition"), drop = FALSE],main = "results_LRT gene clustering",filename = "figures/geneClustering_LRT_full_vrs_reducedModel.pdf")
+k <- pheatmap(sigMat, scale = "row", kmeans_k = 4, annotation = metadata_rown_df[,c("condition"), drop = FALSE],main = "results_LRT gene clustering; k=4",filename = "figures/geneClustering_LRT_full_vrs_reducedModel_kmeans4.pdf")
 
 # names(k$kmeans)
 clusterDF <- as.data.frame(factor(k$kmeans$cluster))
@@ -310,20 +317,46 @@ pheatmap(OrderByCluster, scale = "row", annotation_row = clusterDF, show_rowname
 
 
 # find the optimal clusters
+heatmap_matrixAdjusted <- cola::adjust_matrix(
+    sigMat,
+    sd_quantile = 0.50,
+    max_na = 0.25,
+    verbose = TRUE)
+rowScaledMat_cola <- t(scale(t(heatmap_matrixAdjusted)))
+
+
 rowScaledMat <- t(scale(t(sigMat)))
+set.seed(123) #for reproducibility
 clusterNum <- NbClust(rowScaledMat, distance = "euclidean", min.nc = 2, max.nc = 12,
     method = "kmeans", index = "silhouette")
 clusterNum$Best.nc
 
+library(factoextra)
+set.seed(342)
+pdf("figures/optimal_clusters_silhouette.pdf")
+fviz_nbclust(
+  rowScaledMat_cola,
+  FUNcluster = kmeans,
+  method     = "silhouette",
+  k.max      = 12,
+  nstart     = 25,
+  iter.max   = 100
+)
+dev.off()
+
+clusterNumCola <- NbClust(rowScaledMat_cola, distance = "euclidean", min.nc = 2, max.nc = 12,
+    method = "kmeans", index = "silhouette")
+clusterNumCola$Best.nc
 
 # merge automatic clustering with manual clustering
-clusterNum$Best.partition[1:10]
-orderedCluster <- sort(clusterNum$Best.partition)
-sigMat <- sigMat[match(names(orderedCluster), rownames(sigMat)), ]
+clusterNumCola$Best.partition[1:10]
+orderedCluster <- sort(clusterNumCola$Best.partition)
+rowScaledMat_cola <- rowScaledMat_cola[match(names(orderedCluster), rownames(rowScaledMat_cola)), ]
 # length(clusterNum$Best.partition)
 
-pheatmap(sigMat, scale = "row", annotation_row = clusterDF, show_rownames = FALSE,
-    cluster_rows = FALSE,
+# annotation_row = clusterDF
+pheatmap(rowScaledMat_cola, scale = "row",
+        cluster_rows = TRUE, show_rownames = FALSE,
     annotation = metadata_rown_df[,c("condition"), drop = FALSE], 
     filename = "figures/geneClustering_LRT_full_vrs_reducedModel_kmeans_withOptimumClustering.pdf")
 ################################################################################################################################################
@@ -338,7 +371,6 @@ pheatmap(sigMat, scale = "row", annotation_row = clusterDF, show_rownames = FALS
 ############################### Step 3; Run deseq2 analysis for each contrast
 #####################################################################################################################
 DEResults_ls <- list()
-source(paste0(opt$workflow_dir,"/scripts/run_multiple_contrasts.R")) #split this script into a function
 ################################################################################################
 ############################### Step #; Run DE for each contrast
 ##############################################################################################
@@ -346,8 +378,11 @@ source(paste0(opt$workflow_dir,"/scripts/run_multiple_contrasts.R")) #split this
 #contrast_input="condition_AZA_vs_DMSO"
 # DEResults_ls <- lapply(contrasts_ls[1:2], function(x) {run_multiple_contrasts(contrast_input=x, dseqObject = dds, shrink = FALSE, export_transformed_counts = TRUE)})
 
+# names(DEResults_ls) <- contrasts_ls[1:2]
+
 DEResults_ls <- lapply(contrasts_ls, function(x) {run_multiple_contrasts(contrast_input=x, dseqObject = dds, shrink = FALSE, export_transformed_counts = TRUE)})
 names(DEResults_ls) <- contrasts_ls
+
 #summary(DEResults_ls[[1]])
 # data.frame(DEResults_ls[[1]]) %>% dplyr::filter(padj < 0.05) %>% dim()
 # contrast_input=contrasts_ls[1]
@@ -396,9 +431,20 @@ names(DEResults_ls) <- contrasts_ls
 #paste0("figures/gsea_msigdbr_H_type_CKI_DMSO_EnrichDistrib.pdf")
 #run gsea for all contrasts
 # lapply(names_contrasts_ls, function(x) gsea_analysis(x))
-# h_gsea <- lapply(contrasts_ls, function(x) gsea_analysis(x, specie_type="Mus musculus",category_tag = "H", nCategory_2show = 100, ggwidth = 15, ggheight = 12))
-# c2_gsea <- lapply(contrasts_ls, function(x) gsea_analysis(x, specie_type="Mus musculus",do_gse_GO=FALSE, category_tag = "C2", ggwidth = 15, ggheight = 12))
-# names(h_gsea)
+
+source(paste0(workflow_dir,"scripts/run_GSEA_conditionSpecific.R"))
+
+# dfres <- read_tsv("/data1/greenbab/projects/triplicates_epigenetics_diyva/RNA/rerun_RNASeq_11032025/codingGenes_DE/data/condition_AZA_vs_DMSO/Dseq2Results_condition_AZA_vs_DMSO.tsv")
+# h_gsea <- gsea_analysis("condition_AZA_vs_DMSO", results_df_with_annot=dfres, specie_type="Mus musculus",category_tag = "H", nCategory_2show = 50, ggwidth = 15, ggheight = 12)
+
+
+
+h_gsea <- lapply(contrasts_ls, function(x) gsea_analysis(x, results_df_with_annot=DEResults_ls[[x]]$results_with_Annot, specie_type="Mus musculus",category_tag = "H", nCategory_2show = 20, ggwidth = 15, ggheight = 12))
+c2_gsea <- lapply(contrasts_ls, function(x) gsea_analysis(x, results_df_with_annot=DEResults_ls[[x]]$results_with_Annot,specie_type="Mus musculus",do_gse_GO=FALSE, category_tag = "20", ggwidth = 15, ggheight = 12))
+names(h_gsea)
+
+twosaveGsea <- list(h_gsea=h_gsea, c2_gsea=c2_gsea) 
+save(twosaveGsea, file = "data/gsea_results_coding_genes.RData")
 # names(h_gsea[[1]][["rankedFC"]])
 
 # c2_gsea[[1]]
@@ -406,3 +452,6 @@ names(DEResults_ls) <- contrasts_ls
 # slotnames(h_gsea)
 # slotNames(h_gsea)
 
+
+
+### Add volcano plots

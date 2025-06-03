@@ -18,7 +18,7 @@ library(msigdbr)
 # library(devtools)
 # install_github("ropensci/magick")
 
-## RUN THIS SCRIPT WITH THE FOLLOWING COMMAND
+# # RUN THIS SCRIPT WITH THE FOLLOWING COMMAND
 # Rscript /data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/scripts/combine_results_of_mutiple_conditons.R \
 #   --specie_type "Mus musculus" \
 #   --category_tag "C2" \
@@ -170,7 +170,7 @@ matrixMonoCombo_DMSO_ref_cleaned_scaled <- t(scale(t(matrixMonoCombo_DMSO_ref_cl
 clusterNum <- NbClust(matrixMonoCombo_DMSO_ref_cleaned_scaled, distance = "euclidean", min.nc = 2, max.nc = 12, method = "kmeans", index = "silhouette")
 message("optimal number of clusters: ", clusterNum$Best.nc[1], "; with value index: ", clusterNum$Best.nc[2])
 
-clusterDF$`gene.id`` <- rownames(clusterDF)
+clusterDF$`gene.id` <- rownames(clusterDF)
 write.table(clusterDF, file = "orderedKmeans_clustering_sig_coding_DE_NA_set_to_0_mono_combination_therapy_DMSO_ref.tsv", sep="\t", row.names = FALSE, col.names = TRUE)
 
 #merge nbclusters with metadata
@@ -201,7 +201,7 @@ write.table(optim_orderedClusterDF, file = "Optim_orderedKmeans_clustering_sig_c
 
 # k <- pheatmap(sigMat, scale = "row", kmeans_k = 7, annotation = metadata_rown_df[,c("condition"), drop = FALSE] ,filename = paste0("figures/", contrast_input,"/geneClustering_LRT_full_vrs_reducedModel_kmeans7_",contrast_input,"_only.pdf"))
 splitCluster <- split(optim_orderedClusterDF, optim_orderedClusterDF$clusterid)
-splitCluster[[1]]
+# splitCluster[[1]]
 # #subset on combination therapies
 # pdf(file = paste0("clustering_sig_DE_NA_set_to_0_mono_combination_therapy.pdf"), width=12, height=9)
 # pheatmap(sigLFC_all_genes_only_wide_df_matrix, main = paste0("abs(LFC) > & padj < 0.05 [coding genes]"), scale = "row", annotation_names_row=FALSE, show_rownames = F)
