@@ -323,6 +323,17 @@ ggsave(plt_pval, file = paste0("figures/",contrast_input,"/pNpadjustedValueHisto
 sigLRT_genes <- DeSeq2Results_df_annot %>% 
   dplyr::filter(padj < padj_val)
 
+# add up and down regulated genes gene labels
+DeSeq2Results_df_annot <- DeSeq2Results_df_annot %>% dplyr::mutate(LFClabel = case_when(
+    padj < padj_val & log2FoldChange < -1 ~ "down",
+    padj < padj_val & log2FoldChange > 1 ~ "up",
+    padj > padj_val & log2FoldChange < -1 ~ "no_change",
+    padj > padj_val & log2FoldChange > 1 ~ "no_change",
+    padj < padj_val & abs(log2FoldChange) < 1 ~ "no_change",
+    padj > padj_val & abs(log2FoldChange) < 1 ~ "no_change",
+    TRUE ~ NA))
+
+
 sig_genes_merged_with_rlog <- sigLRT_genes %>% dplyr::select(c(gene.symbol, gene.id)) %>% left_join(res_rld_mat_df_pivtLonger, by="gene.id")
 
 

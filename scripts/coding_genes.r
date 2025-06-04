@@ -148,13 +148,39 @@ if(cond_assign_new_sample_names){
   #drop samples
 if(!is.null(drop_samples)){
 metadata_df <- metadata_df %>% dplyr::filter(!samples %in% drop_samples)
-cts_coding <- cts_coding %>% dplyr::select(!all_of(drop_samples))
+cts_coding <- cts_coding %>% dplyr::select(!all_of(drop_samples)) #%>% head()
+
+## rename samples in matrix
+message("Renaming samples in cts_coding matrix based on metadata_df$new_samples_name")
+# 1. Check that every column in cts_coding has a matching "samples" entry:
+old_cols <- colnames(cts_coding)
+if (any(! old_cols %in% metadata_df$samples)) {
+  warning("Some columns in cts_coding have no entry in metadata_df$samples:",
+          paste(setdiff(old_cols, metadata_df$samples), collapse = ", "))
+}
+# 2. Create a vector of new names in the same order as cts_coding’s columns:
+new_cols <- metadata_df$new_samples_name[ match(old_cols, metadata_df$samples) ]
+# 3. Assign them back to cts_coding:
+colnames(cts_coding) <- new_cols
+cts_coding <- cts_coding[, !is.na(colnames(cts_coding))]
+# cts_coding <- cts_coding %>% dplyr::select(all_of(metadata_df[,"new_samples_name"])) #%>% head()
 }
 
-#assign new sample names
-idx_samples <- match(metadata_df$samples, colnames(cts_coding)) #check if samples match
-names(cts_coding) <- metadata_df[,"new_samples_name"][idx_samples]
-metadata_rown_df <- metadata_df %>% column_to_rownames("new_samples_name")
+# #assign new sample names
+# #idx_samples <- match(metadata_df$samples, colnames(cts_coding)) #check if samples match
+# # names(cts_coding) <- metadata_df[,"new_samples_name"][idx_samples]
+# # 1. Check that every column in cts_coding has a matching "samples" entry:
+# old_cols <- colnames(cts_coding)
+# if (any(! old_cols %in% metadata_df$samples)) {
+#   warning("Some columns in cts_coding have no entry in metadata_df$samples:",
+#           paste(setdiff(old_cols, metadata_df$samples), collapse = ", "))
+# }
+# # 2. Create a vector of new names in the same order as cts_coding’s columns:
+# new_cols <- metadata_df$new_samples_name[ match(old_cols, metadata_df$samples) ]
+# # 3. Assign them back to cts_coding:
+# colnames(cts_coding) <- new_cols
+# cts_coding <- cts_coding[, !is.na(colnames(cts_coding))]
+# metadata_rown_df <- metadata_df %>% column_to_rownames("new_samples_name")
 } else{
 #drop samples
 # if(!is.null(drop_samples)){
@@ -164,6 +190,7 @@ metadata_rown_df <- metadata_df %>% column_to_rownames("samples")
 }
 
 
+cts_coding <- cts_coding %>% dplyr::select(any_of(rownames(metadata_rown_df))) #%>% head() #drop samples from counts matrix
 ##################################################################
 ############ Plot QC
 ##################################################################
@@ -382,7 +409,7 @@ DEResults_ls <- list()
 
 DEResults_ls <- lapply(contrasts_ls, function(x) {run_multiple_contrasts(contrast_input=x, dseqObject = dds, shrink = FALSE, export_transformed_counts = TRUE)})
 names(DEResults_ls) <- contrasts_ls
-
+# names(DEResults_ls[[1]])
 #summary(DEResults_ls[[1]])
 # data.frame(DEResults_ls[[1]]) %>% dplyr::filter(padj < 0.05) %>% dim()
 # contrast_input=contrasts_ls[1]
@@ -439,7 +466,7 @@ source(paste0(workflow_dir,"scripts/run_GSEA_conditionSpecific.R"))
 
 
 
-h_gsea <- lapply(contrasts_ls, function(x) gsea_analysis(x, results_df_with_annot=DEResults_ls[[x]]$results_with_Annot, specie_type="Mus musculus",category_tag = "H", nCategory_2show = 20, ggwidth = 15, ggheight = 12))
+h_gsea <- lapply(contrasts_ls[1:2], function(x) gsea_analysis(x, results_df_with_annot=DEResults_ls[[x]]$results_with_Annot, specie_type="Mus musculus",category_tag = "H", nCategory_2show = 20, ggwidth = 15, ggheight = 12))
 c2_gsea <- lapply(contrasts_ls, function(x) gsea_analysis(x, results_df_with_annot=DEResults_ls[[x]]$results_with_Annot,specie_type="Mus musculus",do_gse_GO=FALSE, category_tag = "20", ggwidth = 15, ggheight = 12))
 names(h_gsea)
 
