@@ -181,6 +181,7 @@ cts_coding <- cts_coding[, !is.na(colnames(cts_coding))]
 # colnames(cts_coding) <- new_cols
 # cts_coding <- cts_coding[, !is.na(colnames(cts_coding))]
 # metadata_rown_df <- metadata_df %>% column_to_rownames("new_samples_name")
+metadata_rown_df <- metadata_df %>% column_to_rownames("new_samples_name")
 } else{
 #drop samples
 # if(!is.null(drop_samples)){
@@ -189,11 +190,17 @@ cts_coding <- cts_coding[, !is.na(colnames(cts_coding))]
 metadata_rown_df <- metadata_df %>% column_to_rownames("samples")
 }
 
+message("\nmetadata_rown_df has ", nrow(metadata_rown_df), " rows and ", ncol(metadata_rown_df), " columns\n")
+print(head(metadata_rown_df))
 
-cts_coding <- cts_coding %>% dplyr::select(any_of(rownames(metadata_rown_df))) #%>% head() #drop samples from counts matrix
+message("Checking if all samples in metadata_rown_df are present in cts_coding")
+print(head(cts_coding))
+##Just commented
+#cts_coding <- cts_coding %>% dplyr::select(any_of(rownames(metadata_rown_df))) #%>% head() #drop samples from counts matrix
 ##################################################################
 ############ Plot QC
 ##################################################################
+message("Plotting QC metrics")
 df_qc <- merge(qc_metrics, metadata_rown_df, by.x = "sample", by.y = "samples")
 pltQC <- ggplot(df_qc, aes(x=sample, y=input.reads, fill=condition)) + 
 geom_bar(stat="identity") + theme_minimal() + 
@@ -227,6 +234,7 @@ contrasts_ls <- dseq_func_out[["constrasts"]]
 #from mike love, how to normalize
 dds <- DESeq(dds) #this command estimates the size factors and dispersion estimates
 
+message("writing normalized counts to file")
 #write files for comparism with methylation
 source(paste0(workflow_dir,"scripts/write_normalizedCounts.R"))
 # /data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/scripts/write_normalizedCounts.R
@@ -390,6 +398,8 @@ pheatmap(rowScaledMat_cola, scale = "row",
 # nrow(rld_4dds2_mat)
 #defining the optimal clusters
 
+### save the dds object for alll conditions
+#saveRDS(dds, file = paste0("data/dds_coding_genes_",paste0(drop_samples, collapse="_"),"_dropped.rds"))
 
 
 
@@ -467,11 +477,12 @@ source(paste0(workflow_dir,"scripts/run_GSEA_conditionSpecific.R"))
 
 
 h_gsea <- lapply(contrasts_ls[1:2], function(x) gsea_analysis(x, results_df_with_annot=DEResults_ls[[x]]$results_with_Annot, specie_type="Mus musculus",category_tag = "H", nCategory_2show = 20, ggwidth = 15, ggheight = 12))
-c2_gsea <- lapply(contrasts_ls, function(x) gsea_analysis(x, results_df_with_annot=DEResults_ls[[x]]$results_with_Annot,specie_type="Mus musculus",do_gse_GO=FALSE, category_tag = "20", ggwidth = 15, ggheight = 12))
+c2_gsea <- lapply(contrasts_ls[1:2], function(x) gsea_analysis(x, results_df_with_annot=DEResults_ls[[x]]$results_with_Annot,specie_type="Mus musculus",do_gse_GO=FALSE, category_tag = "20", ggwidth = 15, ggheight = 12))
 names(h_gsea)
 
-twosaveGsea <- list(h_gsea=h_gsea, c2_gsea=c2_gsea) 
-save(twosaveGsea, file = "data/gsea_results_coding_genes.RData")
+#save GSEA results
+twosaveGsea <- list(h_gsea = h_gsea, c2_gsea = c2_gsea) 
+save(twosaveGsea, file = paste0("data/gsea_results_coding_genes.RData"))
 # names(h_gsea[[1]][["rankedFC"]])
 
 # c2_gsea[[1]]

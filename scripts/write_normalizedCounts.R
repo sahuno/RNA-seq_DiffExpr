@@ -86,9 +86,27 @@ rpkm_filteredCounts_long <- rpkm_filteredCounts %>%
 
 # joined_RPKM_CPM_df <- inner_join(cpm_filteredCounts_long, rpkm_filteredCounts_long, by = c("geneID" , "samples")) #%>% left_join(dds_normalizedCounts_long_2SAVE, by = c("geneID" , "samples"))
 
+compute_tpm <- function(counts, gene_lengths) {
+  # Convert raw counts to RPK (Reads Per Kilobase)
+  rpk <- counts / gene_lengths
+  # Compute scaling factor (per sample)
+  scaling_factors <- colSums(rpk, na.rm = TRUE)
+  # Calculate TPM
+  tpm <- sweep(rpk, 2, scaling_factors, FUN = "/") * 1e6
+  return(tpm)
+}
+
+tpm_matrix_filtered <- compute_tpm(counts(dds_prefiltered), gene_lengths=mcols(dds_prefiltered)$length)
+tpm_filteredCounts_long <- tpm_matrix_filtered %>% 
+  as.data.frame() %>% rownames_to_column(var = "geneID") %>% 
+  pivot_longer(!geneID, names_to = "samples", values_to = "TPM")
+
+#tpmTest <- counts(dds)/mcols(dds)$length
+#scaling_factors2 <- colSums(tpmTest, na.rm = TRUE)
+
 #merge all normalized counts and transformations for visulazation
 rnaSeqMatrices_list <- list(rlog = rlog_filteredCounts_long, vst = vst_filteredCounts_long,
-cpm = cpm_filteredCounts_long, rpkm=rpkm_filteredCounts_long, fpkm = fpkm_filteredCounts_long)
+cpm = cpm_filteredCounts_long, rpkm=rpkm_filteredCounts_long, fpkm = fpkm_filteredCounts_long, tpm = tpm_filteredCounts_long)
 # rpkm_out2 <- edgeR::rpkm(dds, normalized.lib.sizes = TRUE, log = FALSE, prior.count = 2) #gene.length = NULL, 
 
 rnaSeqMatrices_long_df <- reduce(rnaSeqMatrices_list, left_join, by = c("geneID" , "samples"))
