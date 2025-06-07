@@ -1,0 +1,22 @@
+#!/bin/bash
+#SBATCH --job-name=codingRNASEQ         
+#SBATCH --partition=cpushort                
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=8              
+#SBATCH --mem=64G                         
+#SBATCH --time=2:00:00                        
+#SBATCH --output=%x_%j.out                     
+#SBATCH --error=%x_%j.err                       # Error log
+
+# sbatch /data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/scripts/sbatch_coding_genes.job
+
+
+/home/ahunos/miniforge3/envs/r-env/bin/Rscript /data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/scripts/coding_genes.r \
+  --source_dir "/data1/greenbab/projects/triplicates_epigenetics_diyva/RNA/rerun_RNASeq_11032025" \
+  --workflow_dir "/data1/greenbab/users/ahunos/apps/workflows/RNA-seq_DiffExpr/" \
+  --blind_transform TRUE \
+  --drop_samples "R.S.2,R.C.3" \
+  --ref_variable "DMSO" \
+  --min_read_counts 50 \
+  --smallest_group_size 3 \
+  --qc_metrics "/data1/greenbab/projects/methylRNA/Methyl2Expression/data/preprocessed/triplicates_mouse/qc.tsv"

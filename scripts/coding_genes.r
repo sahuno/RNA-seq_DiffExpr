@@ -475,14 +475,34 @@ source(paste0(workflow_dir,"scripts/run_GSEA_conditionSpecific.R"))
 # h_gsea <- gsea_analysis("condition_AZA_vs_DMSO", results_df_with_annot=dfres, specie_type="Mus musculus",category_tag = "H", nCategory_2show = 50, ggwidth = 15, ggheight = 12)
 
 
-
-h_gsea <- lapply(contrasts_ls[1:2], function(x) gsea_analysis(x, results_df_with_annot=DEResults_ls[[x]]$results_with_Annot, specie_type="Mus musculus",category_tag = "H", nCategory_2show = 20, ggwidth = 15, ggheight = 12))
-c2_gsea <- lapply(contrasts_ls[1:2], function(x) gsea_analysis(x, results_df_with_annot=DEResults_ls[[x]]$results_with_Annot,specie_type="Mus musculus",do_gse_GO=FALSE, category_tag = "20", ggwidth = 15, ggheight = 12))
+# DEResults_ls[[x]]$results_with_Annot %>% filter(LFClabel %in% c("up", "down"))  %>% dplyr::filter(LFClabel %in% c("up", "down"))
+h_gsea <- lapply(contrasts_ls, function(x) gsea_analysis(x, results_df_with_annot=DEResults_ls[[x]]$results_with_Annot, specie_type="Mus musculus", qval_filter = 0.05, category_tag = "MH",  subcategory_tag = NULL, nCategory_2show = 20, ggwidth = 15, ggheight = 12))
+c2_gsea <- lapply(contrasts_ls, function(x) gsea_analysis(x, results_df_with_annot=DEResults_ls[[x]]$results_with_Annot, specie_type="Mus musculus",do_gse_GO=FALSE, nCategory_2show = 20, qval_filter = 0.05, category_tag = "C2",  subcategory_tag = NULL, ggwidth = 15, ggheight = 12))
 names(h_gsea)
 
 #save GSEA results
 twosaveGsea <- list(h_gsea = h_gsea, c2_gsea = c2_gsea) 
 save(twosaveGsea, file = paste0("data/gsea_results_coding_genes.RData"))
+
+if(!file.exists("data/gsea_results_coding_genes.RData")){
+    message("GSEA results not saved")
+    message("Running GSEA analysis for select contrasts")
+
+ls_results <- c("/data1/greenbab/projects/triplicates_epigenetics_diyva/RNA/rerun_RNASeq_11032025/codingGenes_DE/data//condition_CKi_vs_DMSO/Dseq2Results_condition_CKi_vs_DMSO.tsv",                                 
+"/data1/greenbab/projects/triplicates_epigenetics_diyva/RNA/rerun_RNASeq_11032025/codingGenes_DE/data//condition_QSTAT_vs_DMSO/Dseq2Results_condition_QSTAT_vs_DMSO.tsv",                             
+"/data1/greenbab/projects/triplicates_epigenetics_diyva/RNA/rerun_RNASeq_11032025/codingGenes_DE/data//condition_QSTAT-CKi_vs_DMSO/Dseq2Results_condition_QSTAT-CKi_vs_DMSO.tsv")
+lapply(ls_results, function(x) {
+    conds <- basename(dirname(x))
+  dfRes <- read_tsv(x)
+  print(head(dfRes))
+  c2_gsea <- gsea_analysis(results_df_with_annot=dfRes, name_de_res = conds, specie_type="Mus musculus", do_gse_GO=FALSE, qval_filter = 0.05, nCategory_2show = 20, category_tag = "C2", subcategory_tag = NULL,ggwidth = 15, ggheight = 12)  
+  h1_gsea <- gsea_analysis(results_df_with_annot=dfRes, name_de_res = conds, specie_type="Mus musculus", do_gse_GO=FALSE, qval_filter = 0.05, nCategory_2show = 20, category_tag = "H", subcategory_tag = NULL,ggwidth = 15, ggheight = 12)
+})
+} else{
+    message("GSEA results saved to data/gsea_results_coding_genes.RData")
+}
+
+
 # names(h_gsea[[1]][["rankedFC"]])
 
 # c2_gsea[[1]]
